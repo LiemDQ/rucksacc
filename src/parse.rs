@@ -9,8 +9,8 @@ use crate::utils::{PeekN, TextPosition};
 
 
 /// Contains the state of the parser. 
-pub struct Parser<'a> {
-    syms: Symbols<'a>,
+pub struct Parser {
+    syms: Symbols,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,16 +88,16 @@ impl TypeCounter {
     }
 }
 
-struct Symbols<'a> {
-    constants: SymbolTable<'a>,
-    globals: SymbolTable<'a>,
-    typedefs: SymbolTable<'a>,
-    identifiers: SymbolTable<'a>,
-    labels: SymbolTable<'a>,
-    externals: SymbolTable<'a>,
+struct Symbols {
+    constants: SymbolTable,
+    globals: SymbolTable,
+    typedefs: SymbolTable,
+    identifiers: SymbolTable,
+    labels: SymbolTable,
+    externals: SymbolTable,
 }
 
-impl<'a> Symbols<'a> {
+impl Symbols {
     pub fn new() -> Self {
         
         Self { 
@@ -114,7 +114,7 @@ impl<'a> Symbols<'a> {
 /// Determine whether an AST node is a constant expression or not. 
 /// 
 fn is_const_expr(node: &ASTNode) -> ParseRes<bool> {
-    Ok(match node.kind {
+    Ok(match &node.kind {
         ASTKind::Int(_, _) | ASTKind::Float(_, _) => true,
         ASTKind::BinaryOp(binop) => is_const_expr(&*binop.rhs)? && is_const_expr(&*binop.lhs)?,
         ASTKind::UnaryOp(unop) => is_const_expr(&*unop.id)?,
@@ -190,7 +190,7 @@ fn infix_binding_power(tok: &TokenKind) -> Option<(u8, u8)> {
             Punct::AssignAdd | Punct::AssignSub | 
             Punct::AssignDiv | Punct::AssignMul | 
             Punct::AssignAnd | Punct::AssignXor |
-            Punct::AssignShl | Punct::AssignShl |
+            Punct::AssignShl | Punct::AssignShr |
             Punct::AssignOr  | Punct::AssignMod => (29,28),
             Punct::Comma => (30, 31),
             _ => return None,
@@ -209,7 +209,8 @@ fn infix_binding_power(tok: &TokenKind) -> Option<(u8, u8)> {
 /// If the token is of the wrong kind, throws an `Err` containing information about the expected 
 /// kind.
 /// 
-/// This method is useful for parsing symbols that **must** appear in a particular branch.
+/// This method is useful for parsing symbols that **must** appear in a particular branch. If the token 
+/// needs to be returned, use `consume_if_equal` instead.
 #[must_use]
 fn ensure_and_consume(iter: &mut impl Iterator<Item = Token>,  tk: TokenKind) -> ParseRes<()> {
     let mut iter = iter.peekable();
@@ -240,22 +241,28 @@ fn check_if_equal(iter: &impl Iterator<Item = Token>, kind: TokenKind) -> bool {
 /// This method is useful for branches in the syntax where the presence of one symbol leads
 /// to a different branch to parse. 
 fn consume_if_equal(iter: &mut impl Iterator<Item = Token>, kind: TokenKind) -> bool {
-    let iter = iter.peekable();
-    iter.peek()
-        .and_then(|tok| Some(if tok.token_type == kind { let _ = iter.next(); true} else {false}))
-        .unwrap_or(false)
+    let mut iter = iter.peekable();
+    if let Some(tok) = iter.peek(){
+        if tok.token_type == kind {
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    }
 }
 
 /// Extract the [`TextPosition`] from the next token in the iterator, without consuming it.
 /// If there is no next token, returns an EOF error. 
 fn extract_position(iter: &mut impl Iterator<Item = Token>) -> ParseRes<TextPosition> {
-    let iter = iter.peekable();
+    let mut iter = iter.peekable();
     let token = match iter.peek() {
         Some(token) => token,
         None => return Parser::gen_eof_error(),
     };
 
-    Ok(token.pos)
+    Ok(token.pos.clone())
 }
 
 /// Checks if the next item in the iterator is `None`, returning an `Err` if this is the case.
@@ -269,7 +276,7 @@ fn consume_token_or_eof(iter: &mut impl Iterator<Item = Token>) -> ParseRes<Toke
 }
 
 
-impl<'a> Parser<'a> {
+impl Parser{
     /// This is the starting point for parsing a C program.
     /// 
     /// 6.9
@@ -279,9 +286,9 @@ impl<'a> Parser<'a> {
     /// `external-declaration ::= function-definition | declaration`
     /// 
     /// Function definitions come with additional restrictions: they cannot be `extern`. 
-    fn parse_translation_unit(&'a mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<Vec<ASTNode>> {
+    fn parse_translation_unit(&mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<Vec<ASTNode>> {
         
-        let nodes = Vec::new();
+        let mut nodes = Vec::new();
         let mut iter = &mut iter.peekable();
         while let Some(tok) = iter.peek() {
             let qty = self.parse_declaration_specifier(iter)?; //TODO: determine return type of this function call.
@@ -356,7 +363,7 @@ impl<'a> Parser<'a> {
                 if let Some(symbol) = self.syms.identifiers.get_symbol(&s) {
                     symbol.node
                 } else {
-                    return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier, &token));
+                    return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier(s), &token));
                 }
             },
             TokenKind::Int(v) => ASTNode::new(ASTKind::Int(v, 8), token.pos), //TODO: how to determine proper size?
@@ -378,7 +385,7 @@ impl<'a> Parser<'a> {
         let mut iter = iter.peekable();
         
         if consume_if_equal(&mut iter, TokenKind::Punct(Punct::OpenParen)) {
-            let name = self.parse_type_name(&mut iter)?;
+            let mut name = self.parse_type_name(&mut iter)?;
             //parse type-name
             ensure_and_consume(&mut iter, TokenKind::Punct(Punct::CloseParen))?;
             ensure_and_consume(&mut iter, TokenKind::Punct(Punct::OpenBrace))?;
@@ -406,11 +413,11 @@ impl<'a> Parser<'a> {
         let token = consume_token_or_eof(iter)?;
 
         if let TokenKind::Str(s) = token.token_type {
-            return self.parse_string_initializer(iter, &mut ty, s);
+            return self.parse_string_initializer(iter, ty, s);
         }
         match ty.kind {
-            TypeKind::Array(_, _) => self.parse_array_initializer(iter, &mut ty),
-            TypeKind::Struct(_, _) | TypeKind::Union(_, _, _) => self.parse_struct_initializer(iter, &ty),
+            TypeKind::Array(_, _) => self.parse_array_initializer(iter, ty),
+            TypeKind::Struct(_, _) | TypeKind::Union(_, _, _) => self.parse_struct_initializer(iter, ty),
             _ => self.parse_assignment_expression(iter)
         }
     }
@@ -425,7 +432,7 @@ impl<'a> Parser<'a> {
             TypeKind::Array(_, _) | TypeKind::Struct(_, _) | TypeKind::Union(_, _, _) => true,
             _ => false,
             } {
-            self.parse_initializer_list(iter, &mut ty)
+            self.parse_initializer_list(iter, ty)
         }
         else if consume_if_equal(iter, TokenKind::Punct(Punct::OpenBrace)) {
             let pos = extract_position(iter)?;
@@ -447,7 +454,7 @@ impl<'a> Parser<'a> {
     fn parse_string_initializer(&mut self, iter: &mut impl Iterator<Item = Token>, ty: &mut TypeInfo, string: String) -> ParseRes<ASTNode> {
         let pos = extract_position(iter)?;
         let chars = string.chars()
-            .map(|c| ASTNode::new(ASTKind::Char(c as i16), pos))
+            .map(|c| ASTNode::new(ASTKind::Char(c as i16), pos.clone()))
             .collect::<Vec<ASTNode>>();
         
             if let TypeKind::Array(_, ref mut len) = &mut ty.kind {
@@ -467,7 +474,7 @@ impl<'a> Parser<'a> {
         if let TypeKind::Array(ref element_type, ref mut len) = &mut ty.kind {
             let is_flexible = *len < 0;
             let mut elems = Vec::new();
-            let element_type = **element_type;
+            let mut element_type = &**element_type;
             loop {
                 let token = consume_token_or_eof(iter)?;
                 if consume_if_equal(iter, TokenKind::Punct(Punct::CloseBrace)) {
@@ -509,7 +516,7 @@ impl<'a> Parser<'a> {
 
         let mut iter = iter.peekable();
         let mut member_iter = member_types.iter();
-        let members = Vec::new();
+        let mut members = Vec::new();
 
         while let Some(tok) = iter.peek() {
             if consume_if_equal(&mut iter, TokenKind::Punct(Punct::CloseBrace)){
@@ -532,7 +539,7 @@ impl<'a> Parser<'a> {
         }
         //TODO: determine what the offset value should be
         let kind = ASTKind::Variable(Var{name: decl.name, ty: decl.qty.ty, offset: 0});
-        Ok(ASTNode { kind: kind, pos: tk.pos})
+        Ok(ASTNode { kind: kind, pos: tk.pos.clone()})
     }
 
     
@@ -541,24 +548,26 @@ impl<'a> Parser<'a> {
     /// Note that we parse the declaration specifier outside of this function. 
     /// A function definition is a scope block (compound statement) with params added to the scope. 
     /// 
-    fn parse_function_definition(&'a mut self, iter: &mut impl Iterator<Item = Token>, qty: QualifiedTypeInfo) -> ParseRes<ASTNode> {
+    fn parse_function_definition(& mut self, iter: &mut impl Iterator<Item = Token>, qty: QualifiedTypeInfo) -> ParseRes<ASTNode> {
         let mut iter = iter.peekable();
-        let token = iter.peek().unwrap(); // TODO: error handling for this
-
+        
         let dec = self.parse_declarator(&mut iter, qty)?; 
-        let params = match dec.qty.ty.kind {
+        let token = iter.peek().unwrap(); // TODO: error handling for this
+        
+        //varargs
+        let params = match &dec.qty.ty.kind {
             TypeKind::Func(_, params, is_vararg) => params, //TODO: handle varargs
             _ => return Err(Parser::gen_parser_err(ParseErrMsg::Something, iter.peekable().peek().unwrap())),
         };
 
         //TODO: parse declarations? these are an optional element. 
 
-        let scope = self.syms.identifiers.enter_scope();
+        let mut scope = self.syms.identifiers.enter_scope();
         
         //as per the C spec, each function must have a `__func__` symbol that contains the name of the function.
-        let func_symbol = ASTNode::new(ASTKind::String(dec.name), TextPosition { line: 0, col: 0, filename: token.pos.filename });
+        let func_symbol = ASTNode::new(ASTKind::String(dec.name), TextPosition { line: 0, col: 0, filename: token.pos.filename.clone()});
         scope.emplace_symbol(
-            "__func__",
+            "__func__".to_string(),
             func_symbol,
             dec.qty.storage,
         )?;
@@ -568,11 +577,13 @@ impl<'a> Parser<'a> {
                 //if function has parameters, add them to the scope 
                 //before passing it to the block
                 for dec in funcs {
+                    let name = dec.name.clone();
+                    let storage = dec.qty.storage.clone();
                     let node = Parser::make_variable_node_from_declarator(dec, &token)?;
                     scope.emplace_symbol(
-                        &dec.name,
+                        name,
                         node,
-                        dec.qty.storage,
+                        storage,
                     );
                 }
                 Box::new(self.parse_compound_stmt(&mut iter, Some(scope))?)
@@ -650,11 +661,11 @@ impl<'a> Parser<'a> {
                 TokenKind::Char(c) => ASTNode {kind: ASTKind::Char(c as i16), pos: token.pos},
                 TokenKind::Str(s) => ASTNode::new(ASTKind::String(s), token.pos),
                 //if it is an identifier, retrieve it from the symbol table
-                TokenKind::Ident(id) => {
+                TokenKind::Ident(ref id) => {
                     if let Some(symbol) = self.syms.identifiers.get_symbol(&id) {
-                        symbol.node
+                        symbol.node.clone()
                     } else {
-                        return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier, &token));
+                        return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier(id.to_string()), &token));
                     }
                 }
                 //special handling for Sizeof keyword
@@ -698,10 +709,7 @@ impl<'a> Parser<'a> {
         //Loop, building up the AST until the minimum binding power is found 
         //or end of expression is reached. 
         loop {
-            let tok = match iter.peek() {
-                Some(t) => t,
-                None => return Parser::gen_eof_error(),
-            };
+            let tok = consume_token_or_eof(iter)?;
 
             let op = match tok.token_type {
                 TokenKind::EOF => break,
@@ -728,7 +736,7 @@ impl<'a> Parser<'a> {
                         ensure_and_consume(&mut iter, TokenKind::Punct(Punct::CloseBoxBracket))?;
                         let node = ASTNode {
                             kind: ASTKind::BinaryOp(BinaryExpr{lhs: Box::new(lhs), op: BinaryOps::Add, rhs: Box::new(rhs)}),
-                            pos: tok.pos,
+                            pos: tok.pos.clone(),
                         };
                         ASTNode{kind: ASTKind::Load(Box::new(node)), pos: tok.pos}
                     },
@@ -774,7 +782,7 @@ impl<'a> Parser<'a> {
                             ASTNode::new(ASTKind::UnaryOp(unary_expr), tok.pos)
                         } else {
                             //this should never happen if postfix binding power has the correct operators
-                            return Parser::gen_internal_error(tok, line!());
+                            return Parser::gen_internal_error(&tok, line!());
                         }
                     }
                 };
@@ -849,10 +857,7 @@ impl<'a> Parser<'a> {
     fn parse_declaration(&mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
         let qty = self.parse_declaration_specifier(iter)?;
         let mut iter = iter.peekable();
-        let token = match iter.peek() {
-            Some(tok) => tok,
-            None => return Parser::gen_eof_error(),
-        };
+        let token = consume_token_or_eof(&mut iter)?;
 
         if consume_if_equal(&mut iter, TokenKind::Punct(Punct::Semicolon)) {
             //end of declaration.
@@ -861,20 +866,22 @@ impl<'a> Parser<'a> {
             Ok(ASTNode {kind: node_kind, pos: token.pos})
 
         } else { //init-declarator, possibly multiple
-            let declarator = self.parse_declarator(&mut iter, qty)?;
+            let mut declarator = self.parse_declarator(&mut iter, qty)?;
+            let mut ty = declarator.qty.ty.clone();
             let lhs = ASTNode::make_variable_declaration(declarator, &token);
 
             if consume_if_equal(&mut iter, TokenKind::Punct(Punct::Assign)) {
-                let mut rhs = self.parse_initializer(&mut iter, &mut declarator.qty.ty)?;
+                let mut rhs = self.parse_initializer(&mut iter, &mut ty)?;
                 let mut new_rhs = rhs.clone();
                 let mut node = ASTNode::make_assignment(lhs, rhs);
                 
+                //there may be multiple init-declarators
                 while !consume_if_equal(&mut iter, TokenKind::Punct(Punct::Semicolon)) {
-                    let declarator = self.parse_declarator(&mut iter, qty)?;
-                    new_rhs = self.parse_initializer(&mut iter, &mut declarator.qty.ty)?; 
+                    let declarator = self.parse_declarator(&mut iter, qty)?; //what is this for?
+                    new_rhs = self.parse_initializer(&mut iter, &mut ty)?; 
                     //TODO: this may necessitate multiple variable declarations being created instead of a make_assignement
                     rhs = ASTNode::make_assignment(rhs, new_rhs);
-                    node.reassign_rhs(rhs);
+                    node = node.reassign_rhs(rhs)?;
                 }
                 Ok(node)
             } else {
@@ -904,14 +911,16 @@ impl<'a> Parser<'a> {
             _ => return None,
         };
 
+        let pos = lhs.pos.clone();
+
         let op_node = Box::new(ASTNode {
-            kind: ASTKind::BinaryOp(BinaryExpr{lhs: Box::new(lhs), op: binop, rhs: Box::new(rhs) }), 
-            pos: lhs.pos,
+            kind: ASTKind::BinaryOp(BinaryExpr{lhs: Box::new(lhs.clone()), op: binop, rhs: Box::new(rhs) }), 
+            pos: pos.clone(),
         });
 
         let assign_node = ASTNode {
             kind: ASTKind::BinaryOp(BinaryExpr {lhs: Box::new(lhs), op: BinaryOps::Assign, rhs: op_node}),
-            pos: lhs.pos,
+            pos: pos,
         };
 
         Some(assign_node)
@@ -943,10 +952,12 @@ impl<'a> Parser<'a> {
             return Ok(declarator);
         }
 
-        let token = iter.peekable().peek().unwrap(); //TODO: proper None handling here
-        match token.token_type {
+        let mut peek = iter.peekable();
+
+        let token = peek.peek().unwrap(); //TODO: proper None handling here
+        match &token.token_type {
             TokenKind::Ident(id) => {
-                let mut declarator = Declarator{ decl_type: DeclaratorTypes::Undetermined, name: id, qty: qty};
+                let mut declarator = Declarator{ decl_type: DeclaratorTypes::Undetermined, name: id.to_string(), qty: qty};
                 self.parse_declarator_suffix(iter, declarator)
             }
             _ => {
@@ -1004,7 +1015,7 @@ impl<'a> Parser<'a> {
         
         let mut is_vararg = false; 
         let mut is_first_loop = true;
-        let params = Vec::new();
+        let mut params = Vec::new();
 
         while let Some(token) = iter.next() {
             if token.token_type == TokenKind::Punct(Punct::CloseParen){
@@ -1036,7 +1047,7 @@ impl<'a> Parser<'a> {
             is_first_loop = false; 
         }
 
-        decl.decl_type = DeclaratorTypes::Function(params);
+        decl.decl_type = DeclaratorTypes::Function(params.clone());
         //TODO: because of our schema, the same information (function parameter type infommation) is redundantly represented 
         //at different levels of the data structure. This should be revisited at a later point to see if this can be simplified. 
         decl.qty.ty = decl.qty.ty.make_func(params.into_iter().map(|d| d.qty.ty).collect(), is_vararg);
@@ -1056,7 +1067,7 @@ impl<'a> Parser<'a> {
         
         if iter.next().unwrap().token_type == TokenKind::Punct(Punct::CloseBoxBracket) {
             decl = self.parse_declarator_suffix(&mut iter, decl)?;
-            decl.qty.ty.make_array(-1);
+            decl.qty.ty = decl.qty.ty.make_array(-1);
             return Ok(decl);
         }
         
@@ -1104,21 +1115,21 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let mut iter = iter.peekable();
-        let (name, members) = match iter.peek() {
-            Some(token) => match token.token_type {
+        //TODO: ensure that using iter.next() instead of iter.peek() here is not problematic
+        let (name, mut members) = match iter.next() {
+            Some(token) => match &token.token_type {
                 TokenKind::Ident(s) => {
                     iter.next();
-                    ensure_and_consume(&mut iter, TokenKind::Punct(Punct::OpenBrace));
-                    (s, self.parse_record_members(&mut iter)?)
+                    ensure_and_consume(iter, TokenKind::Punct(Punct::OpenBrace));
+                    (s.clone(), self.parse_record_members(iter)?)
                 },
                 TokenKind::Punct(Punct::OpenBrace) => {
                     //if the record type has no name, generate a random name
                     //e.g. `typedef struct {int a; } S;`
                     let name: String = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-                    (name, self.parse_record_members(&mut iter)?)
+                    (name, self.parse_record_members(iter)?)
                 },
-                _ => return Parser::gen_expected_error(token, TokenKind::Punct(Punct::OpenBrace)),
+                _ => return Parser::gen_expected_error(&token, TokenKind::Punct(Punct::OpenBrace)),
             },
             None => return Parser::gen_eof_error(),
         };
@@ -1152,7 +1163,7 @@ impl<'a> Parser<'a> {
             let mut size = 0;
             //TODO: handle bitfields
             if is_struct {
-                for mem in members {
+                for mem in &mut members {
                     size += mem.ty.size;
                     align = std::cmp::max(align, mem.ty.align);
                 }
@@ -1163,7 +1174,7 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 let mut index = 0;
-                for (n, mem) in members.into_iter().enumerate() {
+                for (n, mem) in members.iter().enumerate() {
                     let old = size;
                     size = std::cmp::max(mem.ty.size, size);
                     if old < size {
@@ -1186,7 +1197,7 @@ impl<'a> Parser<'a> {
     /// 
     /// `struct-declarator ::= declarator ':' constant-expression | ':' constant-expression
     fn parse_record_members(&mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<Vec<RecordMember>> {
-        let members = Vec::new();
+        let mut members = Vec::new();
 
         while !consume_if_equal(iter, TokenKind::Punct(Punct::CloseBrace)) {
             let qty = self.parse_declaration_specifier(iter)?;
@@ -1207,7 +1218,7 @@ impl<'a> Parser<'a> {
                 first = false;
                 let decl = self.parse_declarator(iter, qty)?;
                 
-                let mut member = RecordMember {name: decl.name, is_bitfield: false, ty: qty.ty};
+                let mut member = RecordMember {name: decl.name, is_bitfield: false, ty: qty.ty.clone()};
                 
                 if consume_if_equal(iter, TokenKind::Punct(Punct::Colon)) {
                     member.is_bitfield = true;
@@ -1244,7 +1255,7 @@ impl<'a> Parser<'a> {
                 // an implicit conversion is always possible. So values not defined in the enum would be 
                 // valid as long as the underlying type is the same.
                 // I believe this is the case, but it would be good to double-check the spec. 
-                let node = ASTNode::new(ASTKind::Typedef(ty, name.to_string()), token.pos);
+                let node = ASTNode::new(ASTKind::Typedef(ty.clone(), name.to_string()), token.pos);
                 self.syms.typedefs.push_symbol(
                     Symbol::new_local(&name, node)
                 )?;
@@ -1313,7 +1324,7 @@ impl<'a> Parser<'a> {
         let pos = extract_position(iter)?;
         let mut args = Vec::new();
         let mut first = true;
-        if let TypeKind::Func(rettype, argtypes, is_vararg) = f.declarator.qty.ty.kind {
+        if let TypeKind::Func(rettype, argtypes, is_vararg) = &f.declarator.qty.ty.kind {
             while !consume_if_equal(iter, TokenKind::Punct(Punct::CloseParen)) {
                 if !first {
                     ensure_and_consume(iter, TokenKind::Punct(Punct::Comma))?;
@@ -1327,7 +1338,7 @@ impl<'a> Parser<'a> {
                 first = false;
             }
 
-            let kind = ASTKind::FuncCall(f.body, args);
+            let kind = ASTKind::FuncCall(f.body.clone(), args);
             Ok(ASTNode::new(kind, pos))
         } else {
             return Parser::gen_internal_error_pos(&pos, line!());
@@ -1336,11 +1347,11 @@ impl<'a> Parser<'a> {
 
     /// `type-specifier ::= restrict | const | volatile`
     fn parse_type_specifier(&mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<Qualifiers> {
-        let quals = Qualifiers::new();
+        let mut quals = Qualifiers::new();
         let mut iter = iter.peekable();
 
         while let Some(token) = iter.peek() {
-            match token.token_type {
+            match &token.token_type {
                 TokenKind::Keyword(kw) => match kw {
                     Keyword::Restrict => quals.is_restrict = true,
                     Keyword::Const => quals.is_const = true,
@@ -1352,6 +1363,32 @@ impl<'a> Parser<'a> {
         }
 
         Ok(quals)
+    }
+
+    /// `typeof` is an unofficial but common compiler extension to perform type inference. For example:
+    /// 
+    /// ```C
+    /// int x = 5;
+    /// typeof(x) y; // same type as 'x'
+    /// ```
+    /// 
+    fn parse_typeof_specifier(&mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<TypeInfo> {
+        ensure_and_consume(iter, TokenKind::Punct(Punct::OpenParen))?;
+        let token = consume_token_or_eof(iter)?;
+        let symbol_name = match &token.token_type {
+            TokenKind::Ident(s) => {s},
+            _ => { return Parser::gen_expected_error(&token, TokenKind::Ident("".to_string()))},
+        };
+        let symbol_type = if let Some(symbol) = self.syms.identifiers.get_symbol(symbol_name) {
+            match &symbol.node.kind {
+                ASTKind::VariableDecl(var, _, _) | ASTKind::Variable(var) => { &var.ty},
+                _ => return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier(symbol_name.clone()), &token)),
+            }
+        } else {
+            return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier(symbol_name.clone()), &token));
+        };
+        ensure_and_consume(iter, TokenKind::Punct(Punct::CloseParen))?;
+        Ok(symbol_type.clone())
     }
 
     /// Pointers are specified in declarators. Pointers can stack, so for example `***T` is 
@@ -1390,7 +1427,7 @@ impl<'a> Parser<'a> {
     ///  
     /// 
     /// TODO: complete this documentation
-    fn parse_statement(&'a mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
+    fn parse_statement(& mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
         let mut iter = iter.peekable_n();
         let tok = iter.peek();
         
@@ -1431,7 +1468,7 @@ impl<'a> Parser<'a> {
     }
 
     ///`labeled-statement ::= identifier | 'case' constant-expression | 'default') ':' statement`
-    fn parse_labeled_stmt(&'a mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
+    fn parse_labeled_stmt(& mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
         if let Some(token) = iter.next() {
             let kind = match token.token_type {
                 TokenKind::Ident(label) => ASTKind::Label(label),
@@ -1461,7 +1498,7 @@ impl<'a> Parser<'a> {
     /// ( 'while' '(' 
     /// | 'for' '(' expression? ';' expression? ';' ) expression ')' statement 
     /// | 'do' statement 'while' '(' expression ')' ';'`
-    fn parse_iteration_stmt(&'a mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
+    fn parse_iteration_stmt(& mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
         let token = consume_token_or_eof(iter)?;
         let kind = match token.token_type {
             TokenKind::Keyword(Keyword::While) => {
@@ -1521,7 +1558,7 @@ impl<'a> Parser<'a> {
 
     /// `selection-statement ::= ( 'if' '(' expression ')' ( statement 'else' )? | 'switch' '(' expression ')' ) statement
     /// Selection statements cover branching statements, specifically if-else and switch statements.
-    fn parse_selection_stmt(&'a mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
+    fn parse_selection_stmt(& mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
         let token = consume_token_or_eof(iter)?;
         let kind = match token.token_type {
             TokenKind::Keyword(Keyword::If) => {
@@ -1562,6 +1599,7 @@ impl<'a> Parser<'a> {
             Ok(expr_res)
         }
     } 
+
     /// `jump-statement ::= ('goto' identifier | 'continue' | 'break' | 'return' expression+ ) ';'
     fn parse_jump_stmt(&mut self, iter: &mut impl Iterator<Item = Token>) -> ParseRes<ASTNode> {
         //calling unwrap is safe because the iterator has already been peeked for nonemptiness
@@ -1634,7 +1672,7 @@ impl<'a> Parser<'a> {
     /// TODO: more sophisticated error handling. Currently if there is an error in any of the 
     /// statements/declarations then the parsing fails. Instead it should collect all of the errors and 
     /// display them afterwards. 
-    fn parse_compound_stmt(&'a mut self, iter: &mut impl Iterator<Item = Token>, scope: Option<ActiveScope<'a>> ) -> ParseRes<ASTNode> {
+    fn parse_compound_stmt(& mut self, iter: &mut impl Iterator<Item = Token>, scope: Option<ActiveScope> ) -> ParseRes<ASTNode> {
         let pos = extract_position(iter)?;
         let mut iter = iter.peekable();
         let mut stmts = Vec::new();
@@ -1664,7 +1702,7 @@ impl<'a> Parser<'a> {
     
     #[inline]
     fn gen_parser_err(msg: ParseErrMsg, token: &Token) -> ParseErr {
-        ParseErr::new(token.pos, token.pos, msg)
+        ParseErr::new(token.pos.clone(), token.pos.clone(), msg)
     }
     
     #[inline]
@@ -1705,7 +1743,7 @@ impl<'a> Parser<'a> {
         let mut is_first_loop = true;
         while let Some(token) = iter.peek() {
             if !is_first_loop {
-                iter.advance_cursor();
+                iter.advance_cursor(); //skip comma 
             }
             is_first_loop = false;
 
@@ -1793,16 +1831,16 @@ impl<'a> Parser<'a> {
         let mut storage_class_defined = false;
         let mut ty = TypeInfo::new();
         let mut tc = TypeCounter::default();
-        while let Some(token) = iter.peek() {
+        while let Some(token) = iter.next() {
 
             if self.is_type_specifier(&token.token_type) {
 
                 //handle storage class specifiers
-                match Parser::read_storage_class_specifier(token, true) {
+                match Parser::read_storage_class_specifier(&token, true) {
                     Some(storage) => {
                         //storage class specifiers are mutually exclusive. If more than one is defined, return an error. 
                         if qty.storage != StorageClass::UNUSED {
-                            return Err(Parser::gen_parser_err(ParseErrMsg::Something, token))
+                            return Err(Parser::gen_parser_err(ParseErrMsg::Something, &token))
 
                         } else {
                             qty.storage = storage;
@@ -1815,8 +1853,8 @@ impl<'a> Parser<'a> {
 
                 //handle type qualifiers
                 let mut match_found = false;
-                let set_flag = |b: &mut bool | {*b = true; match_found = true;};
-                match token.token_type {
+                let mut set_flag = |b: &mut bool | {*b = true; match_found = true;};
+                match &token.token_type {
                     //TODO: may need to add a continue when a match is found
                     TokenKind::Keyword(kw) => match kw {
                         Keyword::Const => set_flag(&mut quals.is_const),
@@ -1835,24 +1873,33 @@ impl<'a> Parser<'a> {
                 }
 
                 //handle user defined types
-                todo!("Handle user defined types");
-                match token.token_type {
+                let info = match &token.token_type {
                     TokenKind::Ident(name) => {
                         if let Some(symbol) = self.syms.typedefs.get_symbol(&name)  {
-                            qty.ty.kind = symbol.typeinfo.kind;
+                            match &symbol.node.kind {
+                                ASTKind::Typedef(ty, _) => ty.clone(),
+                                _ => return Err(Parser::gen_parser_err(ParseErrMsg::InvalidTypeName(name.clone()), &token)),
+                            }
                         } else {
-                            ()
+                            return Err(Parser::gen_parser_err(ParseErrMsg::InvalidTypeName(name.clone()), &token));
                         }
                     },
                     TokenKind::Keyword(kw) => match kw {
-                        Keyword::Struct => self.parse_struct_union_specifier(&mut iter), //struct declaration
-                        Keyword::Union => self.parse_struct_union_specifier(&mut iter),
-                        Keyword::Enum => self.parse_enum_specifier(&mut iter),
-                        Keyword::Typeof => (),
-                        _ => (),
+                        Keyword::Struct => self.parse_struct_union_specifier(&mut iter)?, //struct declaration
+                        Keyword::Union => self.parse_struct_union_specifier(&mut iter)?,
+                        Keyword::Enum => self.parse_enum_specifier(&mut iter)?,
+                        Keyword::Typeof => self.parse_typeof_specifier(&mut iter)?,
+                        _ => return Parser::gen_expected_one_of_error(&token, vec![TokenKind::Keyword(Keyword::Struct), 
+                                                    TokenKind::Keyword(Keyword::Union), 
+                                                    TokenKind::Keyword(Keyword::Enum), 
+                                                    TokenKind::Keyword(Keyword::Typeof)]),
                     },
-                    _ => (),
-                }
+                    _ => return Parser::gen_expected_one_of_error(&token, vec![TokenKind::Ident("()".to_string()),
+                                                                    TokenKind::Keyword(Keyword::Struct), 
+                                                                    TokenKind::Keyword(Keyword::Union), 
+                                                                    TokenKind::Keyword(Keyword::Enum), 
+                                                                    TokenKind::Keyword(Keyword::Typeof)]),
+                };
 
                 //handle builtin types
                 match token.token_type {
@@ -1875,7 +1922,8 @@ impl<'a> Parser<'a> {
                 match counter {
                     VOID => ty = TypeInfo::make_void(),
                     BOOL => ty = TypeInfo::make_bool(),
-                    CHAR => ty = TypeInfo::make_char(),                    
+                    CHAR => ty = TypeInfo::make_char(),
+                    _ => todo!(),       
                 }
 
 
@@ -1907,11 +1955,12 @@ impl<'a> Parser<'a> {
 
     }
     ///Parse a token stream, transforming it into an AST. 
-    pub fn parse(&'a self, tokens: Vec<Token>) -> ParseRes<Vec<ASTNode>> {
-        let iter = tokens.into_iter().peekable();
-        let nodes = Vec::new();
-        while let Some(tok) = iter.peek() {
-            nodes.append(&mut self.parse_translation_unit(&mut iter)?);
+    pub fn parse(& mut self, tokens: Vec<Token>) -> ParseRes<Vec<ASTNode>> {
+        let mut iter = tokens.into_iter().peekable();
+        let mut nodes = Vec::new();
+        while let Some(_) = iter.peek() {
+            let mut node_vec = self.parse_translation_unit(&mut iter)?;
+            nodes.append(&mut node_vec);
         }
 
         Ok(nodes)

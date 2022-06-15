@@ -2,11 +2,9 @@ use std::collections::{HashSet};
 use std::error::Error;
 use std::fs;
 use std::fs::{File};
-use std::str::Chars;
-use std::cell::Cell;
 
 use crate::utils::{TextPosition, PeekNIterator, PeekN};
-use crate::err::{ParseRes, ParseErr, ParseErrMsg};
+use crate::err::{ParseRes, ParseErr, ParseErrMsg, IOErr};
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum Keyword {
@@ -163,13 +161,13 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn new(ttype: TokenKind, has_space: bool, line: usize, col: usize, filename: &str) -> Self {
+    pub fn new(ttype: TokenKind, has_space: bool, line: usize, col: usize, filename: Option<&str>) -> Self {
         Self {
             token_type: ttype,
             at_bol: false,
             has_space: false,
             hideset: HashSet::new(),
-            pos: TextPosition::new(line, col, Some(filename)),
+            pos: TextPosition::new(line, col, filename),
         }
     }
 
@@ -227,7 +225,8 @@ struct Lexer<'a> {
     curr_line: usize,
     curr_col: usize,
     prev_line_col: usize,
-    body: &'a str
+    body: &'a str,
+    filename: Option<&'a str>
 }
 
 /// Contains information about the lexing state, such as the active source file and preprocessor information.
@@ -265,6 +264,22 @@ impl<'a> LexerState<'a> {
     pub fn add_file(&mut self, filename: &str) {
         self.input_files.push(SourceFile::new(filename));
     }
+
+    pub fn parse_input(&mut self) -> Result<Vec<Token>, Box<dyn Error>> {
+        if let Some(file) = self.input_files.first() {
+            //TODO: this needs to be reworked, because right now there is nothing linking the lifetime of the filename
+            //with the lifetime of the lexer. As the filename is owned by SourceFile which itself is owned by a vector inside LexerState, 
+            //it's apparent to us that it will outlive the reference, but the compiler has no way of inferring that. 
+            //After all, we could simply pop the items off of the vector. 
+            //A different approach is needed. 
+            self.lexer.set_source_file(file);
+            self.lexer.tokenize()
+        } else {
+            
+            Err(Box::new(IOErr::NoFilesSpecified))
+        }
+        
+    }
 }
 
 impl<'a> Lexer<'a>{
@@ -275,14 +290,21 @@ impl<'a> Lexer<'a>{
             curr_col: 0, 
             prev_line_col: 0,
             body: body,
+            filename: None,
         }
     }
 
-    
-    pub fn tokenize_file(&mut self, filepath: &str) -> Result<Vec<Token>, Box<dyn Error>> {
-        let contents = fs::read_to_string(filepath)?;
-    
-        self.tokenize(contents)
+    pub fn add_filename(mut self, filename: &'a str) -> Self {
+        self.filename = Some(filename);
+        self
+    }
+
+    pub fn set_source_file(&mut self, source_file: &'a SourceFile) {
+        self.curr_line = 0;
+        self.curr_col = 0;
+        self.prev_line_col = 0;
+        self.body = &source_file.body;
+        self.filename = Some(&source_file.filename);
     }
 
     fn is_punctuator(&self, c: char, n: usize) -> bool {
@@ -422,8 +444,8 @@ impl<'a> Lexer<'a>{
     fn gen_parse_err(&self, msg: ParseErrMsg) -> ParseErr {
         let offset = 1; //placeholder for now
         ParseErr::new(
-            TextPosition { line: self.curr_line, col: self.curr_col, filename: Some(self.filename.to_string()) }, 
-            TextPosition {line: self.curr_line, col: self.curr_col + offset, filename: Some(self.filename.to_string())}, 
+            TextPosition { line: self.curr_line, col: self.curr_col, filename: self.filename.map(|s| s.to_string()) }, 
+            TextPosition {line: self.curr_line, col: self.curr_col + offset, filename: self.filename.map(|s| s.to_string())}, 
             msg,
         )
     }
@@ -497,6 +519,10 @@ impl<'a> Lexer<'a>{
         };
 
         Some(ret)
+    }
+
+    fn get_ref_to_body(&self) -> &str {
+        self.body
     }
 
     fn read_symbol(&mut self, iter: &mut impl Iterator<Item = char>) -> ParseRes<TokenKind> {
@@ -631,8 +657,8 @@ impl<'a> Lexer<'a>{
     }
 
     /// Process a C source file into a vector of tokens. 
-    pub fn tokenize(&mut self, body: String) -> Result<Vec<Token>, Box<dyn Error>> {
-        
+    pub fn tokenize(&mut self) -> Result<Vec<Token>, Box<dyn Error>> {
+        let mut body = self.body;
         
         let mut iter = body.chars().peekable_n();
         let mut has_space = false;
@@ -673,7 +699,7 @@ impl<'a> Lexer<'a>{
             }?;
 
             tokens.push(
-                Token::new(tok, has_space, self.curr_line, self.curr_col, &self.filename)
+                Token::new(tok, has_space, self.curr_line, self.curr_col, self.filename)
             );
             has_space = false;
         }
@@ -684,17 +710,18 @@ impl<'a> Lexer<'a>{
 
 
 #[test]
-fn read_identifier_drops_non_alphanumeric() {
+fn tokenize_assignment() {
     let line = "my_variable2 = 3;";
-    let mut iter = line.chars();
-    let token = Lexer::read_identifier_or_keyword(&mut iter).unwrap();
-    
-    assert_eq!(token, TokenKind::Ident("my_variable2".to_string()));
+
+    let tokens = Lexer::new(line).tokenize().unwrap();
+    assert_eq!(tokens.len(),4);
+    assert_eq!(tokens.first().unwrap().token_type, TokenKind::Ident("my_variable2".to_string()));
 }
 
 #[test]
 fn read_symbol_outputs_correctly() {
     let s1 = ">>= 697";
-    let mut iter = s1.chars();
-    assert_eq!(Lexer::read_symbol(&mut iter).unwrap(),TokenKind::Punct(Punct::AssignShr));
+    let mut lex = Lexer::new(s1);
+    let mut iter = lex.get_ref_to_body().chars();
+    assert_eq!(lex.read_symbol(&mut iter).unwrap(),TokenKind::Punct(Punct::AssignShr));
 }

@@ -6,7 +6,7 @@ use crate::types;
 use crate::parse::{Declarator, DeclaratorTypes};
 
 use std::collections::{HashMap};
-
+use std::rc::Rc;
 /// NOTE: It's a little unclear to me how this will interact with the actual AST nodes,
 /// or whether it would be more appropriate to store a reference to those nodes instead.
 /// This would require some restructuring, but as it stands, it's a little unclear to me
@@ -27,93 +27,64 @@ impl Symbol {
     }
 }
 
+/// Table of symbols. This table is filled up during the parse step and is used for subsequent parsing operations, during code generation
+/// and for resolving ambiguous aspects of the C grammar. 
+/// 
+/// The use of [`Rc`] instead of references is used to prevent lifetimes from propagating "upwards" into the parser. Otherwise it would be 
+/// very difficult to assign a lifetime to internal symbol table references that would be different from the lifetime of the parser, which isn't what
+/// we want. 
+/// 
+/// The use of [`Rc`] also allows for switching to Arc later, which is required in the event that multithreading capability is added.
+///  
 #[derive(Debug, Clone)]
-pub struct SymbolTable <'a> {
-    pub global: SymbolScope<'a>,
-    pub active_sc: &'a SymbolScope<'a>,
-}
-
-/// Convenience struct that automatically closes the active C scope once the current scope is exited.
-#[derive(Debug)]
-pub struct ActiveScope<'a> {
-    table: &'a mut SymbolTable<'a>,
-    scope: &'a mut SymbolScope<'a>,
-}
-
-impl<'a> ActiveScope<'a> {
-    pub fn new(table: &'a mut SymbolTable<'a>, scope: &'a mut SymbolScope<'a>) -> Self {
-        Self { table: table, scope: scope }
-    }
-
-    pub fn exit_scope(self) {
-        self.table.exit_scope();
-    }
-
-    pub fn push_symbol(&self, sym: Symbol) -> ParseRes<()> {
-        self.table.push_symbol(sym)
-    }
-
-    /// Pushes the symbol onto the scope, but accepts the symbol constructor arguments and constructs it in place
-    /// rather than accepting the symbol itself. This is a convenience method to reduce boilerplate.
-    pub fn emplace_symbol(&self, name: &str, ast: ASTNode, storage: StorageClass) -> ParseRes<()> {
-        self.table.push_symbol(Symbol {name: name.to_string(), position: ast.pos, node: ast, sclass: storage})
-    }
-
-    pub fn push_global_symbol(&self, sym: Symbol) -> ParseRes<()> {
-        self.table.push_global_symbol(sym)
-    }
-
-}
-
-impl Drop for ActiveScope<'_> {
-    fn drop(&mut self) {
-        self.exit_scope();
-    }
+pub struct SymbolTable {
+    pub global: Rc<SymbolScope>,
+    pub active_sc: Rc<SymbolScope>,
 }
 
 
-
-impl<'a> SymbolTable<'a> {
+impl SymbolTable {
     pub fn new() -> Self {
-        let sc = SymbolScope::new();
+        let sc = Rc::new(SymbolScope::new());
         Self {
-            global: sc,
-            active_sc: &sc,
+            global: sc.clone(),
+            active_sc: sc,
         }
     }
-    pub fn push_scope(&mut self, mut sc: SymbolScope<'a>){
+    pub fn push_scope(&mut self, mut sc: SymbolScope){
         let idx = self.active_sc.subscopes.len();
         sc.index = Some(idx);
         sc.depth = self.active_sc.depth + 1;
-        sc.up = Some(&self.active_sc);
-        self.active_sc.subscopes.push(sc);
-        self.active_sc = self.active_sc.subscopes.last().unwrap();
+        sc.up = Some(self.active_sc.clone());
+        self.active_sc.subscopes.push(Rc::new(sc));
+        self.active_sc = self.active_sc.subscopes.last().unwrap().clone(); 
     }
 
-    pub fn enter_scope(&'a mut self) -> ActiveScope {
+    pub fn enter_scope(&mut self) -> ActiveScope {
         let idx = self.active_sc.subscopes.len();
         let mut sc = SymbolScope::new();
         sc.index = Some(idx);
         sc.depth = self.active_sc.depth + 1;
-        sc.up = Some(&self.active_sc);
-        self.active_sc.subscopes.push(sc);
-        self.active_sc = self.active_sc.subscopes.last().unwrap();
+        sc.up = Some(self.active_sc.clone());
+        let sc = Rc::new(sc);
+        self.active_sc.subscopes.push(sc.clone());
+        self.active_sc = self.active_sc.subscopes.last().unwrap().clone();
 
-        ActiveScope::new(&mut self, &mut sc)
+        ActiveScope::new(self, sc)
     }
 
     /// Exit the current scope and switch the the higher enclosing scope.
     /// TODO: determine whether this should do nothing if we are already in the global scope, or if we should
     /// throw an error.
     pub fn exit_scope(&mut self) {
-        self.active_sc = self.active_sc.up.unwrap_or_else(|| todo!("Handle error when top scope is reached"));
+        self.active_sc = self.active_sc.up.as_ref().unwrap_or_else(|| todo!("Handle error when top scope is reached")).clone();
     }
 
     /// Add a symbol to the active scope. 
     /// 
     #[must_use]
     pub fn push_symbol(&mut self, mut sym: Symbol) -> ParseRes<()> {
-        let result = self.active_sc.symbols.insert(&sym.name, sym); 
+        let result = self.active_sc.symbols.insert(sym.name.clone(), sym); 
         if result.is_some() {
             Err(ParseErr::new(sym.position, sym.position, ParseErrMsg::Something))
         } else {
@@ -127,7 +98,7 @@ impl<'a> SymbolTable<'a> {
         while scope.up.is_some() {
             scope = scope.up.unwrap();
         }
-        let result = scope.symbols.insert(&sym.name, sym);
+        let result = scope.symbols.insert(sym.name.clone(), sym);
         if result.is_some() {
             Err(ParseErr::new(sym.position, sym.position, ParseErrMsg::Something))
         } else {
@@ -176,15 +147,15 @@ impl<'a> SymbolTable<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct SymbolScope<'a> {
-    pub symbols: HashMap<&'a str, Symbol>,
-    pub subscopes: Vec<SymbolScope<'a>>,
-    pub up: Option<&'a SymbolScope<'a>>,
+pub struct SymbolScope {
+    pub symbols: HashMap<String, Symbol>,
+    pub subscopes: Vec<Rc<SymbolScope>>,
+    pub up: Option<Rc<SymbolScope>>,
     pub index: Option<usize>,
     pub depth: usize,
 }
 
-impl<'a> SymbolScope<'a> {
+impl SymbolScope {
     pub fn new() -> Self {
         Self {
             symbols: HashMap::new(),
@@ -204,6 +175,46 @@ pub enum ScopeKind {
     Global,
     Param,
     Local(i32) //scope depth
+}
+
+
+/// Convenience struct that automatically closes the active C scope once the current scope is exited.
+#[derive(Debug)]
+pub struct ActiveScope<'a> {
+    table: &'a mut SymbolTable,
+    scope: Rc<SymbolScope>,
+}
+
+impl<'a> ActiveScope<'a> {
+    pub fn new(table: &'a mut SymbolTable, scope: Rc<SymbolScope>) -> Self {
+        Self { table: table, scope: scope }
+    }
+
+    pub fn exit_scope(self) {
+        self.table.exit_scope();
+    }
+
+    pub fn push_symbol(&mut self, sym: Symbol) -> ParseRes<()> {
+        self.table.push_symbol(sym)
+    }
+
+    /// Pushes the symbol onto the scope, but accepts the symbol constructor arguments and constructs it in place
+    /// rather than accepting the symbol itself. This is a convenience method to reduce boilerplate.
+    pub fn emplace_symbol(&mut self, name: String, ast: ASTNode, storage: StorageClass) -> ParseRes<()> {
+        self.table.push_symbol(Symbol {name: name, position: ast.pos.clone(), node: ast, sclass: storage})
+    }
+
+    pub fn push_global_symbol(&mut self, sym: Symbol) -> ParseRes<()> {
+        self.table.push_global_symbol(sym)
+    }
+
+}
+
+
+impl<'a> Drop for ActiveScope<'a> {
+    fn drop(&mut self) {
+        self.table.exit_scope();
+    }
 }
 
 pub struct Entity {
@@ -282,14 +293,15 @@ impl ASTNode {
         let var = Var {name: decl.name, ty: decl.qty.ty, offset: 0}; //TODO: handle offset
         Self {
             kind: ASTKind::VariableDecl(var, decl.qty.storage, None),
-            pos: tok.pos,
+            pos: tok.pos.clone(),
         }
     }
 
     pub fn make_assignment(lhs: ASTNode, rhs: ASTNode) -> Self {
+        let pos = lhs.pos.clone();
         let binexpr = BinaryExpr {lhs: Box::new(lhs), op: BinaryOps::Assign, rhs: Box::new(rhs)};
         let kind = ASTKind::BinaryOp(binexpr);
-        Self { kind: kind, pos: lhs.pos }
+        Self { kind: kind, pos: pos }
     }
 
     pub fn reassign_rhs(mut self, rhs: ASTNode) -> ParseRes<Self> {
@@ -311,9 +323,9 @@ impl ASTNode {
     /// a pinter to a global variable and n is an integer. The latter is only acceptable
     /// for an initialization expression for a global variable. 
     pub fn eval_int(&self) -> ParseRes<i64> {
-        let result = match self.kind {
+        let result = match &self.kind {
             ASTKind::Float(_, _) => todo!("Error handling for eval"),//should never happen
-            ASTKind::Int(n, _) => n, //TODO: this doesn't handle type conversions properly
+            ASTKind::Int(n, _) => *n, //TODO: this doesn't handle type conversions properly
             ASTKind::Cast(node, _) => node.eval_int()?,
             ASTKind::UnaryOp(op) => self.eval_unary_op(&op)?,
             ASTKind::BinaryOp(op) => self.eval_binary_op_int(&op)?,
@@ -377,9 +389,9 @@ impl ASTNode {
     
     //evaluate floating-point operations
     pub fn eval_float(&self) -> ParseRes<f64> {
-        let result = match self.kind {
-            ASTKind::Float(n, _) => n,
-            ASTKind::Int(n, _) => n as f64, 
+        let result = match &self.kind {
+            ASTKind::Float(n, _) => *n,
+            ASTKind::Int(n, _) => *n as f64, 
             ASTKind::Cast(node, _) => node.eval_float()?,
             ASTKind::UnaryOp(op) => return Err(self.gen_err(ParseErrMsg::InvalidFloatOperation)),
             ASTKind::BinaryOp(op) => self.eval_binary_op_float(&op)?,
@@ -429,9 +441,9 @@ impl ASTNode {
     }
 
     fn sizeof(&self) -> ParseRes<i64> {
-        Ok(match self.kind {
-            ASTKind::Int(_, n) => n as i64,
-            ASTKind::Float(_, n) => n as i64,
+        Ok(match &self.kind {
+            ASTKind::Int(_, n) => *n as i64,
+            ASTKind::Float(_, n) => *n as i64,
             ASTKind::Char(_) => 1,
             ASTKind::Variable(v) => v.ty.size,
             _ => return Err(self.gen_err(ParseErrMsg::Something)),
@@ -439,9 +451,9 @@ impl ASTNode {
     }
 
     fn alignof(&self) -> ParseRes<i64> {
-        Ok(match self.kind {
-            ASTKind::Int(_, n) => n as i64,
-            ASTKind::Float(_, n) => n as i64,
+        Ok(match &self.kind {
+            ASTKind::Int(_, n) => *n as i64,
+            ASTKind::Float(_, n) => *n as i64,
             ASTKind::Char(_) => 1,
             ASTKind::Variable(v) => v.ty.align,
             _ => return Err(self.gen_err(ParseErrMsg::Something)),
@@ -449,7 +461,7 @@ impl ASTNode {
     }
 
     fn gen_err(&self, msg: ParseErrMsg) -> ParseErr {
-        ParseErr::new(self.pos, self.pos, msg)
+        ParseErr::new(self.pos.clone(), self.pos.clone(), msg)
     }
 }
 

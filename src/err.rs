@@ -3,6 +3,37 @@ use crate::utils::TextPosition;
 use crate::lex::TokenKind;
 use std::fmt;
 
+
+trait PrintReport {
+    fn generate_message(&self) -> String;
+    fn print_single_report(&self);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IOErr {
+    NoFilesSpecified,
+}
+
+impl PrintReport for IOErr {
+    fn print_single_report(&self) {
+        
+    }
+
+    fn generate_message(&self) -> String {
+        match self {
+            IOErr::NoFilesSpecified => "No files specified.".to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for IOErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IO Error: {}", self.generate_message())
+    }
+
+}
+impl std::error::Error for IOErr {}
+
 /// Generic error type used throughout the compiler. 
 /// The `TextPositions` indicate where they occur in the text.
 #[derive(Debug, Clone)]
@@ -24,9 +55,10 @@ pub enum ParseErrMsg {
     NotCompileTimeConstant,
     NotConstExpr,
     InvalidSizeof,
+    InvalidTypeName(String), //type name
     InvalidExpressionToken,
     InternalError(u32), //line number
-    UnknownIdentifier,
+    UnknownIdentifier(String), //name of unknown identifier
     InvalidFunctionCall,
     TooManyArguments,
     InvalidStructReference,
@@ -35,18 +67,18 @@ pub enum ParseErrMsg {
 }
 
 impl ParseErrMsg {
-    pub fn print_message(&self) -> &str {
+    pub fn print_message(&self) -> String {
         match self {
-            ParseErrMsg::Something => "Something happened",
-            ParseErrMsg::ExpectedSymbol(tk) => &format!("Expected {:?}", tk),
-            ParseErrMsg::ExpectedOneOfSymbols(v) => &format!("Expected one of: {:?}", v),
-            ParseErrMsg::InvalidFloatOperation => "Invalid floating-point operation",
-            ParseErrMsg::InvalidSizeof => "Invalid object for sizeof call",
-            ParseErrMsg::NotCompileTimeConstant => "Not a compile time constant",
-            ParseErrMsg::NotConstExpr => "Not a valid constant expression",
-            ParseErrMsg::InternalError(line) => &format!("Internal compiler error at line {}", line),
-            ParseErrMsg::EOF => "End of file reached",
-            _ => "Unimplemented error",
+            ParseErrMsg::Something => "Something happened".to_string(),
+            ParseErrMsg::ExpectedSymbol(tk) => format!("Expected {:?}", tk),
+            ParseErrMsg::ExpectedOneOfSymbols(v) => format!("Expected one of: {:?}", v),
+            ParseErrMsg::InvalidFloatOperation => "Invalid floating-point operation".to_string(),
+            ParseErrMsg::InvalidSizeof => "Invalid object for sizeof call".to_string(),
+            ParseErrMsg::NotCompileTimeConstant => "Not a compile time constant".to_string(),
+            ParseErrMsg::NotConstExpr => "Not a valid constant expression".to_string(),
+            ParseErrMsg::InternalError(line) => format!("Internal compiler error at line {}", line),
+            ParseErrMsg::EOF => "End of file reached".to_string(),
+            _ => "Unimplemented error".to_string(),
         }
     }
 }
@@ -57,9 +89,11 @@ impl ParseErr {
     pub fn new(pos: TextPosition, pos_end: TextPosition, msg : ParseErrMsg) -> Self {
         ParseErr { position: pos, position_end: pos_end, message: msg, }
     }
+}
 
-    pub fn report_single(&self) {
-        if let Some(filename) = self.position.filename {
+impl PrintReport for ParseErr {
+    fn print_single_report(&self) {
+        if let Some(filename) = &self.position.filename {
             Report::build(ReportKind::Error, &filename, self.position.col)
                 .with_message(format!("{:?}", self.message))
                 .with_label(Label::new((&filename, self.position.col..self.position_end.col)))
@@ -70,16 +104,19 @@ impl ParseErr {
             println!("Error: no filename found.");
         }
     }
+
+    fn generate_message(&self) -> String {
+        self.message.print_message()
+    }
 }
 
 impl std::error::Error for ParseErr {}
 
 impl fmt::Display for ParseErr {
     fn fmt(&self, f:  &mut fmt::Formatter) -> fmt::Result {
-        match self.position.filename {
+        match &self.position.filename {
             Some(s) => write!(f, "Error in {} at {:?}, message: \n{:?}", s, self.position, self.message),
             None => write!(f, "Error at {:?}, message: \n{:?}", self.position, self.message),
         }
     }
 }
-
