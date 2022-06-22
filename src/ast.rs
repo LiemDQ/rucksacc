@@ -6,7 +6,6 @@ use crate::types;
 use crate::parse::{Declarator, DeclaratorTypes};
 
 use std::collections::{HashMap};
-use std::rc::Rc;
 /// NOTE: It's a little unclear to me how this will interact with the actual AST nodes,
 /// or whether it would be more appropriate to store a reference to those nodes instead.
 /// This would require some restructuring, but as it stands, it's a little unclear to me
@@ -23,84 +22,124 @@ pub struct Symbol {
 
 impl Symbol {
     pub fn new_local(name: &str, node: ASTNode) -> Self {
-        Self { name: name.to_string(), position: node.pos, sclass: StorageClass::Auto, node: node }
+        Self { name: name.to_string(), position: node.pos.clone(), sclass: StorageClass::Auto, node: node }
     }
 }
 
 /// Table of symbols. This table is filled up during the parse step and is used for subsequent parsing operations, during code generation
 /// and for resolving ambiguous aspects of the C grammar. 
 /// 
-/// The use of [`Rc`] instead of references is used to prevent lifetimes from propagating "upwards" into the parser. Otherwise it would be 
-/// very difficult to assign a lifetime to internal symbol table references that would be different from the lifetime of the parser, which isn't what
-/// we want. 
+/// Each translation unit has its own symbol table. 
 /// 
-/// The use of [`Rc`] also allows for switching to Arc later, which is required in the event that multithreading capability is added.
+/// C scopes are modeled using [parent pointer trees](https://en.wikipedia.org/wiki/Parent_pointer_tree) 
+/// which allow higher scopes to be accessed from lower scopes. This is difficult to model idiomatically in Rust 
+/// as it would lead to circular references. Instead, we use a basic arena-based approach, using a Vec instead, 
+/// with the table owning all scopes. This leads to a relatively simple implementation, particularly since we do
+/// not remove scopes once they are added to the table.  
 ///  
+/// The global scope is always at index 0.
 #[derive(Debug, Clone)]
 pub struct SymbolTable {
-    pub global: Rc<SymbolScope>,
-    pub active_sc: Rc<SymbolScope>,
+    // pub global: Rc<Cell<SymbolScope>>,
+    // pub active_sc: Rc<Cell<SymbolScope>>,
+    scopes: Vec<SymbolScope>,
+    active_scope_idx: usize,
 }
 
 
 impl SymbolTable {
     pub fn new() -> Self {
-        let sc = Rc::new(SymbolScope::new());
         Self {
-            global: sc.clone(),
-            active_sc: sc,
+            scopes: vec![SymbolScope::new(0)],
+            active_scope_idx: 0
         }
     }
-    pub fn push_scope(&mut self, mut sc: SymbolScope){
-        let idx = self.active_sc.subscopes.len();
-        sc.index = Some(idx);
-        sc.depth = self.active_sc.depth + 1;
-        sc.up = Some(self.active_sc.clone());
-        self.active_sc.subscopes.push(Rc::new(sc));
-        self.active_sc = self.active_sc.subscopes.last().unwrap().clone(); 
+
+    pub fn global(&self) -> &SymbolScope {
+        //we are guaranteed to have a scope at index 0 since it is created when the table is initialized, so unchecked unwrapping is fine
+        self.scopes.get(0).unwrap()
     }
 
-    pub fn enter_scope(&mut self) -> ActiveScope {
-        let idx = self.active_sc.subscopes.len();
-        let mut sc = SymbolScope::new();
-        sc.index = Some(idx);
-        sc.depth = self.active_sc.depth + 1;
-        sc.up = Some(self.active_sc.clone());
-        let sc = Rc::new(sc);
-        self.active_sc.subscopes.push(sc.clone());
-        self.active_sc = self.active_sc.subscopes.last().unwrap().clone();
+    pub fn global_mut(&mut self) -> &mut SymbolScope {
+        self.scopes.get_mut(0).unwrap()
+    }
 
-        ActiveScope::new(self, sc)
+    pub fn push_scope(&mut self, mut sc: SymbolScope){
+        let idx = self.scopes.len();
+        sc.index = idx;
+        sc.depth = self.active_scope().depth + 1;
+        sc.up = Some(self.active_scope_idx);
+        self.scopes.push(sc);
+        self.active_scope_idx = idx; 
+    }
+
+    fn active_scope(&self) -> &SymbolScope {
+        self.scopes.get(self.active_scope_idx).unwrap()
+    }
+
+    fn active_scope_mut(&mut self) -> &mut SymbolScope {
+        self.scopes.get_mut(self.active_scope_idx).unwrap()
+    }
+
+    /// Creates a new child scope and enters it. 
+    pub fn enter_scope(&mut self) -> ActiveScope {
+        let idx = self.scopes.len();
+        let mut sc = SymbolScope::new(idx);
+        sc.depth = self.active_scope().depth + 1;
+        sc.up = Some(self.active_scope_idx);
+        self.scopes.push(sc);
+
+        self.active_scope_idx = idx; 
+
+        ActiveScope::new(self, idx)
+    }
+
+    pub fn enter_scope_unmanaged(&mut self) -> usize {
+        let idx = self.scopes.len();
+        let mut sc = SymbolScope::new(idx);
+        sc.depth = self.active_scope().depth + 1;
+        sc.up = Some(self.active_scope_idx);
+        self.scopes.push(sc);
+        self.active_scope_idx = idx; 
+        idx
+    }
+
+    fn get_scope(&self, idx: usize) -> Option<&SymbolScope> {
+        self.scopes.get(idx)
+    }
+
+    fn get_scope_mut(&mut self, idx: usize) -> Option<&mut SymbolScope> {
+        self.scopes.get_mut(idx)
     }
 
     /// Exit the current scope and switch the the higher enclosing scope.
     /// TODO: determine whether this should do nothing if we are already in the global scope, or if we should
     /// throw an error.
     pub fn exit_scope(&mut self) {
-        self.active_sc = self.active_sc.up.as_ref().unwrap_or_else(|| todo!("Handle error when top scope is reached")).clone();
+        self.active_scope_idx = self.active_scope().up.unwrap()
     }
 
     /// Add a symbol to the active scope. 
     /// 
     #[must_use]
-    pub fn push_symbol(&mut self, mut sym: Symbol) -> ParseRes<()> {
-        let result = self.active_sc.symbols.insert(sym.name.clone(), sym); 
+    pub fn push_symbol(&mut self, sym: Symbol) -> ParseRes<()> {
+        let position = sym.position.clone();
+        let result = self.active_scope_mut().symbols.insert(sym.name.clone(), sym); 
         if result.is_some() {
-            Err(ParseErr::new(sym.position, sym.position, ParseErrMsg::Something))
+            Err(ParseErr::new(position.clone(), position, ParseErrMsg::Something))
         } else {
             Ok(())
         }
     }
 
     ///Add a symbol to the highest level (global) scope.
-    pub fn push_global_symbol(&mut self, mut sym: Symbol) -> ParseRes<()> {
-        let mut scope = self.active_sc;
-        while scope.up.is_some() {
-            scope = scope.up.unwrap();
-        }
+    pub fn push_global_symbol(&mut self, sym: Symbol) -> ParseRes<()> {
+        let scope = self.global_mut();
+        let position = sym.position.clone();
+        
         let result = scope.symbols.insert(sym.name.clone(), sym);
         if result.is_some() {
-            Err(ParseErr::new(sym.position, sym.position, ParseErrMsg::Something))
+            Err(ParseErr::new(position.clone(), position, ParseErrMsg::Something))
         } else {
             Ok(())
         }
@@ -108,34 +147,41 @@ impl SymbolTable {
 
     pub fn get_symbol(&self, name: &str) -> Option<&Symbol> {
         //search lowest scope first
-        let mut opt_symbol = self.active_sc.symbols.get(name);
-        if opt_symbol.is_some() {
-            return opt_symbol;
-        }
         //if value is not found in the lowest scope, search all enclosing scopes
         //up until the global scope.
-        let scope = self.active_sc;
-        while let Some(scope) = scope.up {
-            opt_symbol = scope.symbols.get(name);
+        let mut idx = self.active_scope_idx;
+        while let Some(scope) = self.get_scope(idx) {
+            let opt_symbol = scope.symbols.get(name);
             if opt_symbol.is_some() {
                 return opt_symbol;
+            }
+            if let Some(up) = scope.up {
+                idx = up
+            } else {
+                break;
             }
         }
         //no symbol is found
         None
     }
 
-    pub fn get_mut_symbol(&self, name: &str) -> Option<&mut Symbol> {
-        let mut opt_symbol = self.active_sc.symbols.get_mut(name);
-        if opt_symbol.is_some() {
-            return opt_symbol;
-        }
+    pub fn get_mut_symbol(&mut self, name: &str) -> Option<&mut Symbol> {
+        let mut idx = self.active_scope_idx;
 
-        let scope = self.active_sc;
-        while let Some(scope) = scope.up {
-            opt_symbol = scope.symbols.get_mut(name);
-            if opt_symbol.is_some() {
-                return opt_symbol;
+        
+        while let Some(scope) = self.get_scope(idx) {
+            if scope.symbols.contains_key(name) {
+                //a double lookup is required here due to a known limitation of the borrow checker. 
+                //the workaround necessitates borrowing as immutable in the loop, and then performing a mutable
+                //borrow once the correct symbol has been found.
+                //see https://www.reddit.com/r/learnrust/comments/rmgif7/mutable_borrow_in_while_loop/
+
+                return self.scopes.get_mut(idx).unwrap().symbols.get_mut(name);
+            }
+            if let Some(up) = scope.up {
+                idx = up
+            } else {
+                break;
             }
         }
         None
@@ -146,22 +192,23 @@ impl SymbolTable {
     }
 }
 
+
+/// Represents a scope in C, typically indicated by enclosing `{}` brackets. 
+/// 
 #[derive(Debug, Clone)]
 pub struct SymbolScope {
     pub symbols: HashMap<String, Symbol>,
-    pub subscopes: Vec<Rc<SymbolScope>>,
-    pub up: Option<Rc<SymbolScope>>,
-    pub index: Option<usize>,
+    pub up: Option<usize>,
+    pub index: usize,
     pub depth: usize,
 }
 
 impl SymbolScope {
-    pub fn new() -> Self {
+    pub fn new(index: usize) -> Self {
         Self {
             symbols: HashMap::new(),
-            subscopes: Vec::new(),
             up: None,
-            index: None,
+            index: index,
             depth: 0
         }
     }
@@ -182,12 +229,12 @@ pub enum ScopeKind {
 #[derive(Debug)]
 pub struct ActiveScope<'a> {
     table: &'a mut SymbolTable,
-    scope: Rc<SymbolScope>,
+    scope_idx: usize,
 }
 
 impl<'a> ActiveScope<'a> {
-    pub fn new(table: &'a mut SymbolTable, scope: Rc<SymbolScope>) -> Self {
-        Self { table: table, scope: scope }
+    pub fn new(table: &'a mut SymbolTable, scope: usize) -> Self {
+        Self { table: table, scope_idx: scope }
     }
 
     pub fn exit_scope(self) {
@@ -198,6 +245,10 @@ impl<'a> ActiveScope<'a> {
         self.table.push_symbol(sym)
     }
 
+    pub fn index(&self) -> usize {
+        self.scope_idx
+    }
+
     /// Pushes the symbol onto the scope, but accepts the symbol constructor arguments and constructs it in place
     /// rather than accepting the symbol itself. This is a convenience method to reduce boilerplate.
     pub fn emplace_symbol(&mut self, name: String, ast: ASTNode, storage: StorageClass) -> ParseRes<()> {
@@ -206,6 +257,10 @@ impl<'a> ActiveScope<'a> {
 
     pub fn push_global_symbol(&mut self, sym: Symbol) -> ParseRes<()> {
         self.table.push_global_symbol(sym)
+    }
+
+    pub fn get_symbol(&self, name: &str) -> Option<&Symbol> {
+        self.table.get_symbol(name)
     }
 
 }
