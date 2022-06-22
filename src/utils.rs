@@ -19,9 +19,17 @@ impl TextPosition {
         }
     }
 
+    pub fn new_file_only(filename: &str) -> Self {
+        Self { line: 0, col: 0, filename: Some(filename.to_string()) }
+    }
+
     pub fn new_without_file(line: usize, col: usize) -> Self {
         Self { line: line, col: col, filename: None }
 
+    }
+
+    pub fn add_offset(&self, offset: usize) -> Self {
+        Self { line: self.line, col: self.col + offset, filename: self.filename.clone() }
     }
 }
 
