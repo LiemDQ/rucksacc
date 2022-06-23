@@ -221,23 +221,41 @@ fn remove_backslash_newline(contents : &mut str) {
 /// TODO: one possible alternative implementation is to split the varying state (such as the current line and current column 
 /// into a separate `LexerState` struct have have the lexer merely contain immutable things like the filename and body. This could 
 /// facilitate reasoning about the code and ease borrow checker restrictions.
-struct Lexer<'a> {
+struct LexerState {
     curr_line: usize,
     curr_col: usize,
     prev_line_col: usize,
-    body: &'a str,
-    filename: Option<&'a str>
+    source_file_index: usize,
 }
 
-/// Contains information about the lexing state, such as the active source file and preprocessor information.
-struct LexerState<'a> {
-    lexer: Lexer<'a>,
+/// Contains all lexing data, such as the active source file and preprocessor information.
+struct Lexer {
+    state: LexerState,
     input_files: Vec<SourceFile>,
     cond_stack : Vec<bool>,
-    active: usize,
 }
 
-/// Contains information about the source files being lexed. 
+impl LexerState {
+
+    pub fn new(index: usize) -> Self {
+        LexerState { 
+            curr_line: 0, 
+            curr_col: 0, 
+            prev_line_col: 0,
+            source_file_index: index,
+        }
+    }
+    
+
+    pub fn set_source_file(&mut self, index: usize) {
+        self.curr_line = 0;
+        self.curr_col = 0;
+        self.prev_line_col = 0;
+        self.source_file_index = index; 
+    }
+}
+
+/// Contains information about the source files. 
 struct SourceFile {
     filename: String,
     file: File,
@@ -256,91 +274,47 @@ impl SourceFile {
     }
 }
 
-impl<'a> LexerState<'a> {
+impl Lexer {
     pub fn new() -> Self {
-        Self { lexer: Lexer::new(&""), input_files: Vec::new(), cond_stack: Vec::new(), active: 0 }
+        Self { state: LexerState::new(0), input_files: Vec::new(), cond_stack: Vec::new() }
     }
 
     pub fn add_file(&mut self, filename: &str) {
         self.input_files.push(SourceFile::new(filename));
     }
 
-    pub fn parse_input(&mut self) -> Result<Vec<Token>, Box<dyn Error>> {
-        if let Some(file) = self.input_files.first() {
-            //TODO: this needs to be reworked, because right now there is nothing linking the lifetime of the filename
-            //with the lifetime of the lexer. As the filename is owned by SourceFile which itself is owned by a vector inside LexerState, 
-            //it's apparent to us that it will outlive the reference, but the compiler has no way of inferring that. 
-            //After all, we could simply pop the items off of the vector. 
-            //A different approach is needed. 
-            self.lexer.set_source_file(file);
-            self.lexer.tokenize()
-        } else {
-            
-            Err(Box::new(IOErr::NoFilesSpecified))
+    fn get_current_filename(&self) -> Option<&str> {
+        self.input_files.get(self.state.source_file_index).map(|file| file.filename.as_str())
+    }
+
+    pub fn tokenize_inputs(&mut self) -> Result<Vec<Vec<Token>>, Box<dyn Error>> {
+        if self.input_files.is_empty() {
+            return Err(Box::new(IOErr::NoFilesSpecified));
         }
+
+        let mut tokens = Vec::new();
         
-    }
-}
-
-impl<'a> Lexer<'a>{
-
-    pub fn new(body: &'a str) -> Self {
-        Lexer { 
-            curr_line: 0, 
-            curr_col: 0, 
-            prev_line_col: 0,
-            body: body,
-            filename: None,
+        let mut i = self.input_files.len() - 1; 
+        while let Some(file) = self.input_files.pop() {
+            self.state.set_source_file(i);
+            tokens.push(self.tokenize(&file.body)?);
+            i -= 1;
         }
-    }
 
-    pub fn add_filename(mut self, filename: &'a str) -> Self {
-        self.filename = Some(filename);
-        self
-    }
-
-    pub fn set_source_file(&mut self, source_file: &'a SourceFile) {
-        self.curr_line = 0;
-        self.curr_col = 0;
-        self.prev_line_col = 0;
-        self.body = &source_file.body;
-        self.filename = Some(&source_file.filename);
-    }
-
-    fn is_punctuator(&self, c: char, n: usize) -> bool {
-        if c.is_ascii_punctuation() {
-            return true;
-        }
-        let iter = self.body.chars().skip(n);
-        false
-    }
-
-    fn get_symbol(&self, n: usize, has_space: bool) -> Punct {
-        let mut iter = self.body.chars().skip(n).peekable();
-        let view = &self.body[n..];
-        let c = iter.next().unwrap();
-        match c {
-            '[' => Punct::OpenBoxBracket,
-            ']' => Punct::CloseBoxBracket,
-            '{' => Punct::OpenBrace,
-            '}' => Punct::CloseBrace,
-            '(' => Punct::OpenParen,
-            ')' => Punct::CloseParen,
-            _ => Punct::Add(PMKind::Undet),
-        }
+        Ok(tokens)
     }
 
     fn read_identifier_or_keyword(&mut self, iter: &mut impl Iterator<Item = char>) -> ParseRes<TokenKind> {
         let mut identifier = String::new();
         
-        for c in self.advance(iter) {
+        while let Some(c) = self.advance(iter) {
             match c {
                 'a'..='z' | 'A'..='Z' | '_' | '0'..='9' => identifier.push(c),
                 _ => break,
             };
         }
 
-        if let keyword = self.get_keyword_from_string(identifier.as_str())? {
+        if let Ok(keyword) = self.get_keyword_from_string(identifier.as_str()) {
             Ok(TokenKind::Keyword(keyword))
         } else {
             Ok(TokenKind::Ident(identifier))
@@ -353,13 +327,13 @@ impl<'a> Lexer<'a>{
     fn advance(&mut self, iter: &mut impl Iterator<Item = char>) -> Option<char> {
         match iter.next() {
             Some(c) if c == '\n' => {
-                self.prev_line_col += self.curr_col;
-                self.curr_col = 0;
-                self.curr_line += 1;
+                self.state.prev_line_col += self.state.curr_col;
+                self.state.curr_col = 0;
+                self.state.curr_line += 1;
                 Some(c)
             },
             Some(c) => {
-                self.curr_col += 1;
+                self.state.curr_col += 1;
                 Some(c)
             }
             None => None //end of file
@@ -375,12 +349,15 @@ impl<'a> Lexer<'a>{
         }
     }
 
-    fn read_numeric_literal(&mut self, iter: &mut impl Iterator<Item = char>) -> ParseRes<TokenKind> {
+    fn read_numeric_literal<I: Iterator<Item = char>>(&mut self, iter: &mut PeekNIterator<I>) -> ParseRes<TokenKind> {
         let mut num = 0;
 
-        while let Some(c) = self.advance(iter){
+        while let Some(c) = iter.peek(){
             match c {
-                '0'..='9' => num = num*10+c.to_digit(10).unwrap() as i64,
+                '0'..='9' => {
+                    num = num*10+c.to_digit(10).unwrap() as i64;
+                    self.advance(iter);
+                },
                 '.' => todo!(), //TODO: handle float values
                 _ => break,
             }
@@ -437,26 +414,25 @@ impl<'a> Lexer<'a>{
         if kw != Keyword::INVALID {
             Ok(kw)
         } else {
-            Err(self.gen_parse_err(ParseErrMsg::Something))
+            Err(self.gen_parse_err(ParseErrMsg::UnrecognizedKeyword))
         }
     }
 
     fn gen_parse_err(&self, msg: ParseErrMsg) -> ParseErr {
         let offset = 1; //placeholder for now
         ParseErr::new(
-            TextPosition { line: self.curr_line, col: self.curr_col, filename: self.filename.map(|s| s.to_string()) }, 
-            TextPosition {line: self.curr_line, col: self.curr_col + offset, filename: self.filename.map(|s| s.to_string())}, 
+            TextPosition { line: self.state.curr_line, col: self.state.curr_col, filename: self.get_current_filename().map(|s| s.to_string()) }, 
+            TextPosition {line: self.state.curr_line, col: self.state.curr_col + offset, filename: self.get_current_filename().map(|s| s.to_string())}, 
             msg,
         )
     }
 
-    fn read_string_literal(&mut self, iter: &mut impl Iterator<Item = char>) -> ParseRes<TokenKind> {
+    fn read_string_literal<I: Iterator<Item = char>>(&mut self, iter: &mut PeekNIterator<I>) -> ParseRes<TokenKind> {
         let mut literal = String::new();
-        let mut iter = iter.peekable_n();
-        while let Some(c) = self.advance(&mut iter) {
+        while let Some(c) = self.advance(iter) {
             match c {
                 '"' => break,
-                '\\' => literal.push(Lexer::read_escaped_char(&mut iter).unwrap()),
+                '\\' => literal.push(Lexer::read_escaped_char(iter).unwrap()),
                 _ => literal.push(c),
             }
         }
@@ -464,17 +440,16 @@ impl<'a> Lexer<'a>{
         Ok(TokenKind::Str(literal))
     }
 
-    fn read_char_literal(&self, iter: &mut impl Iterator<Item = char>) -> ParseRes<TokenKind> {
-        let mut iter = iter.peekable_n();
+    fn read_char_literal<I: Iterator<Item = char>>(&self, iter: &mut PeekNIterator<I>) -> ParseRes<TokenKind> {
         let c = iter.peek();
         let &c = if c.is_some() {
             c.unwrap()
         } else {
-            return Err(self.gen_parse_err(ParseErrMsg::Something));
+            return Err(self.gen_parse_err(ParseErrMsg::EOF));
         };
         let c = {
             if c == '\\' {
-                Lexer::read_escaped_char(&mut iter).unwrap()
+                Lexer::read_escaped_char(iter).unwrap()
             } else {
                 c
             }
@@ -492,8 +467,7 @@ impl<'a> Lexer<'a>{
     /// fall through to the usual functions.
     /// It may be worth revisiting whether chars() is the correct abstraction and whether
     /// we should use a raw bytestream instead, and parse all of the escape characters manually. 
-    fn read_escaped_char(iter: &mut impl Iterator<Item = char>) -> Option<char> {
-        let mut iter = iter.peekable_n();
+    fn read_escaped_char<I: Iterator<Item = char>>(iter: &mut PeekNIterator<I>) -> Option<char> {
         let &c = if iter.peek().is_some() {
             iter.peek().unwrap()
         } else {
@@ -521,13 +495,8 @@ impl<'a> Lexer<'a>{
         Some(ret)
     }
 
-    fn get_ref_to_body(&self) -> &str {
-        self.body
-    }
-
-    fn read_symbol(&mut self, iter: &mut impl Iterator<Item = char>) -> ParseRes<TokenKind> {
-        let mut iter = iter.peekable_n();
-        let symbol = match self.advance(&mut iter).unwrap_or(' ') {
+    fn read_symbol<I: Iterator<Item = char>>(&mut self, iter: &mut PeekNIterator<I>) -> ParseRes<TokenKind> {
+        let symbol = match self.advance(iter).unwrap_or(' ') {
             '[' => Punct::OpenBoxBracket,
             ']' => Punct::CloseBoxBracket,
             '{' => Punct::OpenBrace,
@@ -635,11 +604,11 @@ impl<'a> Lexer<'a>{
             },
             '.' => {
                 match iter.peek().unwrap_or(&' '){
-                    '0'..='9' => return Err(self.gen_parse_err(ParseErrMsg::Something)), //is a float, this should never happen
+                    '0'..='9' => return Err(self.gen_parse_err(ParseErrMsg::InternalError(line!()))), //is a float, this should never happen
                     '.' => if iter.peek_nth(1).unwrap_or(&' ') == &'.' {
                             Punct::Vararg
                         } else {
-                            return Err(self.gen_parse_err(ParseErrMsg::Something))
+                            return Err(self.gen_parse_err(ParseErrMsg::InvalidSymbol))
                         }
                     _ => Punct::Point,
                 }
@@ -650,15 +619,14 @@ impl<'a> Lexer<'a>{
                     _ => Punct::Hash,
                 }
             }
-            _ => return Err(self.gen_parse_err(ParseErrMsg::Something)),
+            _ => return Err(self.gen_parse_err(ParseErrMsg::InvalidSymbol)),
         };
 
         Ok(TokenKind::Punct(symbol))
     }
 
     /// Process a C source file into a vector of tokens. 
-    pub fn tokenize(&mut self) -> Result<Vec<Token>, Box<dyn Error>> {
-        let mut body = self.body;
+    pub fn tokenize(&mut self, body: &str) -> Result<Vec<Token>, Box<dyn Error>> {
         
         let mut iter = body.chars().peekable_n();
         let mut has_space = false;
@@ -699,7 +667,7 @@ impl<'a> Lexer<'a>{
             }?;
 
             tokens.push(
-                Token::new(tok, has_space, self.curr_line, self.curr_col, self.filename)
+                Token::new(tok, has_space, self.state.curr_line, self.state.curr_col, self.get_current_filename())
             );
             has_space = false;
         }
@@ -713,15 +681,20 @@ impl<'a> Lexer<'a>{
 fn tokenize_assignment() {
     let line = "my_variable2 = 3;";
 
-    let tokens = Lexer::new(line).tokenize().unwrap();
-    assert_eq!(tokens.len(),4);
+    let tokens = Lexer::new().tokenize(line).unwrap();
     assert_eq!(tokens.first().unwrap().token_type, TokenKind::Ident("my_variable2".to_string()));
+    // assert_eq!(tokens.len(),4);
+    assert_eq!(tokens.into_iter().map(|tk| tk.token_type).collect::<Vec<TokenKind>>(), 
+        vec![TokenKind::Ident("my_variable2".to_string()), 
+            TokenKind::Punct(Punct::Assign), 
+            TokenKind::Int(3), 
+            TokenKind::Punct(Punct::Semicolon)]);
 }
 
 #[test]
 fn read_symbol_outputs_correctly() {
     let s1 = ">>= 697";
-    let mut lex = Lexer::new(s1);
-    let mut iter = lex.get_ref_to_body().chars();
+    let mut lex = Lexer::new();
+    let mut iter = s1.chars().peekable_n();
     assert_eq!(lex.read_symbol(&mut iter).unwrap(),TokenKind::Punct(Punct::AssignShr));
 }

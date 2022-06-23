@@ -73,11 +73,11 @@ impl SymbolTable {
         self.active_scope_idx = idx; 
     }
 
-    fn active_scope(&self) -> &SymbolScope {
+    pub fn active_scope(&self) -> &SymbolScope {
         self.scopes.get(self.active_scope_idx).unwrap()
     }
 
-    fn active_scope_mut(&mut self) -> &mut SymbolScope {
+    pub fn active_scope_mut(&mut self) -> &mut SymbolScope {
         self.scopes.get_mut(self.active_scope_idx).unwrap()
     }
 
@@ -104,11 +104,11 @@ impl SymbolTable {
         idx
     }
 
-    fn get_scope(&self, idx: usize) -> Option<&SymbolScope> {
+    pub fn get_scope(&self, idx: usize) -> Option<&SymbolScope> {
         self.scopes.get(idx)
     }
 
-    fn get_scope_mut(&mut self, idx: usize) -> Option<&mut SymbolScope> {
+    pub fn get_scope_mut(&mut self, idx: usize) -> Option<&mut SymbolScope> {
         self.scopes.get_mut(idx)
     }
 
@@ -130,6 +130,11 @@ impl SymbolTable {
         } else {
             Ok(())
         }
+    }
+    
+    #[must_use]
+    pub fn emplace_symbol(&mut self, name: String, ast: ASTNode, storage: StorageClass) -> ParseRes<()> {
+        self.push_symbol(Symbol {name: name, position: ast.pos.clone(), node: ast, sclass: storage})
     }
 
     ///Add a symbol to the highest level (global) scope.
@@ -359,6 +364,7 @@ impl ASTNode {
         Self { kind: kind, pos: pos }
     }
 
+    /// When the node is a binary expression
     pub fn reassign_rhs(mut self, rhs: ASTNode) -> ParseRes<Self> {
         match &mut self.kind {
             ASTKind::BinaryOp(ref mut bexp) => match bexp.op {
