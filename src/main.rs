@@ -6,6 +6,7 @@ mod parse;
 mod types;
 mod err;
 mod ast;
+mod symbols;
 
 use clap::Parser;
 
