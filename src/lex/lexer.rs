@@ -2,7 +2,7 @@ use super::token::{AmpKind, AstKind, PMKind, Token, TokenKind, Keyword, Punct};
 use crate::err::{ParseErr, ParseErrMsg, ParseRes, IOErr};
 use crate::utils::{PeekNIterator, PeekN, TextPosition};
 use std::fs::File;
-use std::fs;
+use std::{fs, vec};
 use std::error::Error;
 /// Contains the state of the lexer. 
 /// TODO: one possible alternative implementation is to split the varying state (such as the current line and current column 
@@ -74,40 +74,6 @@ impl Lexer {
         self.input_files.get(self.state.source_file_index).map(|file| file.filename.as_str())
     }
 
-    pub fn tokenize_inputs(&mut self) -> Result<Vec<Vec<Token>>, Box<dyn Error>> {
-        if self.input_files.is_empty() {
-            return Err(Box::new(IOErr::NoFilesSpecified));
-        }
-
-        let mut tokens = Vec::new();
-        
-        let mut i = self.input_files.len() - 1; 
-        while let Some(file) = self.input_files.pop() {
-            self.state.set_source_file(i);
-            tokens.push(self.tokenize(&file.body)?);
-            i -= 1;
-        }
-
-        Ok(tokens)
-    }
-
-    fn read_identifier_or_keyword(&mut self, iter: &mut impl Iterator<Item = char>) -> ParseRes<TokenKind> {
-        let mut identifier = String::new();
-        
-        while let Some(c) = self.advance(iter) {
-            match c {
-                'a'..='z' | 'A'..='Z' | '_' | '0'..='9' => identifier.push(c),
-                _ => break,
-            };
-        }
-
-        if let Ok(keyword) = self.get_keyword_from_string(identifier.as_str()) {
-            Ok(TokenKind::Keyword(keyword))
-        } else {
-            Ok(TokenKind::Ident(identifier))
-        }
-    }
-
     /// Advance an iterator, while also incrementing the active position in the lexer. This should be called 
     /// in lieu of calling `iter.next()` to ensure that the data remains consistent.
     #[inline]
@@ -127,6 +93,45 @@ impl Lexer {
         }
     }
 
+
+    pub fn tokenize_inputs(&mut self) -> Result<Vec<Vec<Token>>, Box<dyn Error>> {
+        if self.input_files.is_empty() {
+            return Err(Box::new(IOErr::NoFilesSpecified));
+        }
+
+        let mut tokens = Vec::new();
+        
+        let mut i = self.input_files.len() - 1; 
+        while let Some(file) = self.input_files.pop() {
+            self.state.set_source_file(i);
+            tokens.push(self.tokenize(&file.body)?);
+            i -= 1;
+        }
+
+        Ok(tokens)
+    }
+
+    fn read_identifier_or_keyword<I: Iterator<Item = char>>(&mut self, iter: &mut PeekNIterator<I>) -> ParseRes<TokenKind> {
+        let mut identifier = String::new();
+        
+        while let Some(&c) = iter.peek() {
+            match c {
+                'a'..='z' | 'A'..='Z' | '_' | '0'..='9' =>{
+                    identifier.push(c);
+                    self.advance(iter);
+                }
+                _ => break,
+            };
+        }
+
+        if let Ok(keyword) = self.get_keyword_from_string(identifier.as_str()) {
+            Ok(TokenKind::Keyword(keyword))
+        } else {
+            Ok(TokenKind::Ident(identifier))
+        }
+    }
+
+ 
     /// Skip ahead by `n` values, discarding the elements while updating the internal position. This is useful in situations
     /// where a parsing function has successfully parsed a multi-char token, and now needs to update the iterator before terminating.
     #[inline]
@@ -297,26 +302,26 @@ impl Lexer {
             ',' => Punct::Comma,
             '!' => {
                 match iter.peek().unwrap_or(&' ') {
-                    '=' => Punct::Ne,
+                    '=' => {self.advance(iter); Punct::Ne},
                     _ => Punct::Not,
                 }
             },
             '&' => {
                 match iter.peek().unwrap_or(&' ') {
-                    '&' => Punct::LAnd,
-                    '=' => Punct::AssignAnd,
+                    '&' => {self.advance(iter); Punct::LAnd},
+                    '=' => {self.advance(iter); Punct::AssignAnd},
                     _   => Punct::Ampersand(AmpKind::Undet)
                 }
             },
             '=' => {
                 match iter.peek().unwrap_or(&' '){
-                    '=' => Punct::Eq,
+                    '=' => {self.advance(iter); Punct::Eq},
                     _   => Punct::Assign,
                 }
             },
             '*' => {
                 match iter.peek().unwrap_or(&' '){
-                    '=' => Punct::AssignMul,
+                    '=' => {self.advance(iter); Punct::AssignMul},
                     //asterisks can be ambiguous in terms of what they mean. For example, `T** b;` can be either
                     //`(T)*(*b);` which multiplies `T` by the deference of `b`, or `(T**) b;` which declares a pointer-to-pointer `b` with underlying
                     // base type `T`. 
@@ -331,61 +336,64 @@ impl Lexer {
                     //TODO: something like `a+++++b` can only be parsed as `(a++) + (++b)` which currently will fail to be parsed 
                     //as it will be tokenized as Inc Inc Add which will fail at the parsing step.
                     //this may not be a huge issue as both clang and gcc are incapable of parsing this anyway.
-                    '+' => Punct::Inc, 
-                    '=' => Punct::AssignAdd,
-                    _   => Punct::Add(PMKind::Undet),
+                    '+' => {self.advance(iter); Punct::Inc}, 
+                    '=' => {self.advance(iter); Punct::AssignAdd},
+                    _  => Punct::Add(PMKind::Undet),
                 }
             },
             '-' => {
                 match iter.peek().unwrap_or(&' '){
-                    '-' => Punct::Dec,
-                    '=' => Punct::AssignSub,
-                    '>' => Punct::Arrow,
+                    '-' => {self.advance(iter); Punct::Dec},
+                    '=' => {self.advance(iter); Punct::AssignSub},
+                    '>' => {self.advance(iter); Punct::Arrow},
                     _   => Punct::Sub(PMKind::Undet)
                 }
             },
             '%' => {
                 match iter.peek().unwrap_or(&' '){
-                    '=' => Punct::AssignMod,
+                    '=' => {self.advance(iter); Punct::AssignMod},
                     _   => Punct::Mod,
                 }
             },
             '^' => {
                 match iter.peek().unwrap_or(&' ') {
-                    '=' => Punct::AssignXor,
+                    '=' => {self.advance(iter); Punct::AssignXor},
                     _ => Punct::Xor,
                 }
             },
             '>' => {
                 match iter.peek().unwrap_or(&' '){
-                    '>' => match iter.peek_nth(1).unwrap_or(&' '){
-                        '=' => Punct::AssignShr,
-                        _ => Punct::Shr,
-                    }
-                    '=' => Punct::Ge,
+                    '>' => {
+                        self.advance(iter);
+                        match iter.peek().unwrap_or(&' '){
+                            '=' => {self.advance(iter); Punct::AssignShr},
+                            _ => Punct::Shr,
+                        }
+                    },
+                    '=' => {self.advance(iter); Punct::Ge},
                     _ => Punct::Gt,
                 }
             },
             '<' => {
                 match iter.peek().unwrap_or(&' '){
-                    '<' => match iter.peek_nth(1).unwrap_or(&' '){
-                        '=' => Punct::AssignShl,
+                    '<' => match iter.peek().unwrap_or(&' '){
+                        '=' => {self.advance(iter); Punct::AssignShl},
                         _ => Punct::Shl,
                     }
-                    '=' => Punct::Le,
+                    '=' => {self.advance(iter); Punct::Le},
                     _ => Punct::Lt,
                 }
             },
             '|' => {
                 match iter.peek().unwrap_or(&' '){
-                    '|' => Punct::LOr,
-                    '=' => Punct::AssignOr,
+                    '|' => {self.advance(iter); Punct::LOr},
+                    '=' => {self.advance(iter); Punct::AssignOr},
                     _ => Punct::Or
                 }
             },
             '/' => {
                 match iter.peek().unwrap_or(&' '){
-                    '=' => Punct::AssignDiv,
+                    '=' => {self.advance(iter); Punct::AssignDiv},
                     _ => Punct::Div,
                 }
             },
@@ -402,7 +410,7 @@ impl Lexer {
             },
             '#' => {
                 match iter.peek().unwrap_or(&' '){
-                    '#' => Punct::PoundPound,
+                    '#' => {self.advance(iter); Punct::PoundPound},
                     _ => Punct::Hash,
                 }
             }
@@ -484,4 +492,60 @@ fn read_symbol_outputs_correctly() {
     let mut lex = Lexer::new();
     let mut iter = s1.chars().peekable_n();
     assert_eq!(lex.read_symbol(&mut iter).unwrap(),TokenKind::Punct(Punct::AssignShr));
+}
+
+#[test]
+fn tokenize_function() {
+    let funcdef = "int func(){\n\
+        int x = 0;\n\
+        for(int i = 0; i < 4; i++){\n\
+            x++;\n\
+        }\n\
+        return x;\n\
+    }";
+    let mut lex = Lexer::new();
+    let tokens = lex.tokenize(funcdef).unwrap();
+    assert_eq!(tokens.into_iter().map(|tk| tk.token_type).collect::<Vec<TokenKind>>(),
+        vec![
+            //int func(){
+            TokenKind::Keyword(Keyword::Int),
+            TokenKind::Ident("func".to_string()),
+            TokenKind::Punct(Punct::OpenParen),
+            TokenKind::Punct(Punct::CloseParen),
+            TokenKind::Punct(Punct::OpenBrace),
+            //int x = 0;
+            TokenKind::Keyword(Keyword::Int),
+            TokenKind::Ident("x".to_string()),
+            TokenKind::Punct(Punct::Assign),
+            TokenKind::Int(0),
+            TokenKind::Punct(Punct::Semicolon),
+            //for(int i = 0; i < 4; i++)
+            TokenKind::Keyword(Keyword::For),
+            TokenKind::Punct(Punct::OpenParen),
+            TokenKind::Keyword(Keyword::Int),
+            TokenKind::Ident("i".to_string()),
+            TokenKind::Punct(Punct::Assign),
+            TokenKind::Int(0),
+            TokenKind::Punct(Punct::Semicolon),
+            TokenKind::Ident("i".to_string()),
+            TokenKind::Punct(Punct::Lt),
+            TokenKind::Int(4),
+            TokenKind::Punct(Punct::Semicolon),
+            TokenKind::Ident("i".to_string()),
+            TokenKind::Punct(Punct::Inc),
+            TokenKind::Punct(Punct::CloseParen),
+            //{ x++; }
+            TokenKind::Punct(Punct::OpenBrace),
+            TokenKind::Ident("x".to_string()),
+            TokenKind::Punct(Punct::Inc),
+            TokenKind::Punct(Punct::Semicolon),
+            TokenKind::Punct(Punct::CloseBrace),
+            //return x;
+            TokenKind::Keyword(Keyword::Return),
+            TokenKind::Ident("x".to_string()),
+            TokenKind::Punct(Punct::Semicolon),
+            //}
+            TokenKind::Punct(Punct::CloseBrace)
+        ]
+    );
 }
