@@ -48,12 +48,14 @@ pub struct ParseErr {
 #[derive(Debug, PartialEq, Clone)]
 pub enum ParseErrMsg {
     Something,
+    UnrecognizedKeyword,
     ExpectedSymbol(TokenKind),
     ExpectedOneOfSymbols(Vec<TokenKind>),
     EOF,
     InvalidFloatOperation,
     NotCompileTimeConstant,
     NotConstExpr,
+    InvalidSymbol,
     InvalidSizeof,
     InvalidTypeName(String), //type name
     InvalidExpressionToken,

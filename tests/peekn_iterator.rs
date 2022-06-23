@@ -111,7 +111,7 @@ fn move_forward_while_is_some() {
     let iterable = [1,2,3,4];
     let mut iter = iterable.iter().peekable_n();
 
-    let _ = iter.advance_cursor_while(|_| ());
+    let _ = iter.advance_cursor_while(|_| true);
 
     let peek = iter.peek();
     assert_eq!(peek, None);
@@ -195,7 +195,7 @@ fn check_advance_while() {
     let v1 = iter.peek();
     assert_eq!(v1, Some(&&1));
 
-    let iter = iter.advance_cursor_while(|x| x < 5);
+    let iter = iter.advance_cursor_while(|x| **x < 5);
     let v5 = iter.peek();
     assert_eq!(v5, Some(&&5));
 }

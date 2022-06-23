@@ -168,7 +168,7 @@ impl<I: Iterator> PeekNIterator<I> {
     /// This function does not move the cursor or consume the underlying elements. 
     /// 
     /// ```rust
-    /// use trucc::utils::PeekN;
+    /// use rucksacc::utils::PeekN;
     /// 
     /// let string = "Hello world!";
     /// let mut iter = string.chars().peekable_n();
@@ -314,7 +314,7 @@ impl<I: Iterator> PeekNIterator<I> {
     /// from a performance standpoint, `VecDeque` can be substituted in instead, for provides efficient removal from the front and back.
     /// 
     ///```rust
-    /// use trucc::utils::PeekN;
+    /// use rucksacc::utils::PeekN;
     ///
     /// let iterable = [1, 2, 3, 4];
     /// let mut iter = iterable.iter().peekable_n();

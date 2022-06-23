@@ -138,7 +138,9 @@ impl TypeInfo {
 
     ///
     pub fn make_array(self, len: i64) -> Self {
-        TypeInfo::make_new_info(TypeKind::Array(Box::new(self), len), self.size * len, self.align)
+        let align = self.align.clone();
+        let size = self.size.clone();
+        TypeInfo::make_new_info(TypeKind::Array(Box::new(self), len), size* len, align )
     }
 
     pub fn make_vla_array(self, len: ASTNode) -> Self {
