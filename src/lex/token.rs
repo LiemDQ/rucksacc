@@ -1,5 +1,6 @@
 use crate::utils::TextPosition;
 use std::collections::HashSet;
+use std::fmt::Display;
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum Keyword {
@@ -55,6 +56,55 @@ pub enum Keyword {
     INVALID,
 }
 
+impl Display for Keyword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Keyword::Auto => "auto",
+            Keyword::Break => "break",
+            Keyword::Case => "case",
+            Keyword::Const => "const",
+            Keyword::Continue => "continue",
+            Keyword::Default => "default",
+            Keyword::Do => "do",
+            Keyword::Double => "double",
+            Keyword::Else => "else",
+            Keyword::Enum => "enum",
+            Keyword::Extern => "extern",
+            Keyword::Float => "float",
+            Keyword::For => "for",
+            Keyword::Goto => "goto",
+            Keyword::If => "if",
+            Keyword::Inline => "inline",
+            Keyword::Int => "int",
+            Keyword::Long => "long",
+            Keyword::Register => "register",
+            Keyword::Restrict => "restrict",
+            Keyword::Return => "return",
+            Keyword::Short => "short",
+            Keyword::Signed => "signed",
+            Keyword::Sizeof => "sizeof",
+            Keyword::Static => "static",
+            Keyword::Struct => "struct",
+            Keyword::Typedef => "typedef",
+            Keyword::Union => "union",
+            Keyword::Unsigned => "unsigned",
+            Keyword::Void => "void",
+            Keyword::While => "while",
+            Keyword::AlignAs => "_Alignas",
+            Keyword::AlignOf => "_Alignof",
+            Keyword::Atomic => "_Atomic",
+            Keyword::Bool => "_Bool",
+            Keyword::Complex => "_Complex",
+            Keyword::Generic => "_Generic",
+            Keyword::NoReturn => "_Noreturn",
+            Keyword::StaticAssert => "_Static_assert",
+            Keyword::ThreadLocal => "_Thread_local",
+            _ => panic!("Invalid keyword"),
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum Punct {
     Any,
@@ -108,6 +158,63 @@ pub enum Punct {
     Vararg,
 }
 
+impl Display for Punct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Punct::OpenParen =>{"("},
+            Punct::CloseParen =>{")"},
+            Punct::OpenBrace =>{"{"},
+            Punct::CloseBrace =>{"}"},
+            Punct::OpenBoxBracket => {"["},
+            Punct::CloseBoxBracket =>{"]"},
+            Punct::Comma =>{","},
+            Punct::Semicolon =>{";"},
+            Punct::Colon =>{":"},
+            Punct::PoundPound =>{"##"}, //## but i have no idea what this actually does
+            Punct::Point =>{"."},
+            Punct::Arrow =>{"->"}, // -> 
+            Punct::Inc =>{"++"}, // ++
+            Punct::Dec =>{"--"}, // --
+            Punct::Add(_) =>{"+"}, // +
+            Punct::Sub(_) =>{"-"}, // -
+            Punct::Asterisk(_) =>{"*"}, //asterisk has multiple possible meanings: pointer type, deference operator, multiplication
+            Punct::Div =>{"/"},
+            Punct::Mod =>{"%"},
+            Punct::Not =>{"!"},
+            Punct::BitwiseNot =>{"~"},
+            Punct::Ampersand(_) =>{"&"},
+            Punct::Shl =>{"<<"},
+            Punct::Shr =>{">>"},
+            Punct::Lt =>{"<"},
+            Punct::Le =>{"<="},
+            Punct::Gt =>{">"},
+            Punct::Ge =>{">="},
+            Punct::Eq =>{"=="},
+            Punct::Ne =>{"!="},
+            Punct::Xor =>{"^"},
+            Punct::Or =>{"|"},
+            Punct::LAnd =>{"&&"},
+            Punct::LOr =>{"||"},
+            Punct::Question =>{"?"},
+            Punct::Assign =>{"="},
+            Punct::AssignAdd =>{"+="},
+            Punct::AssignSub =>{"-="},
+            Punct::AssignMul =>{"*="},
+            Punct::AssignDiv =>{"/="},
+            Punct::AssignMod =>{"%="},
+            Punct::AssignShl =>{"<<="},
+            Punct::AssignShr =>{">>="},
+            Punct::AssignAnd =>{"&="},
+            Punct::AssignXor =>{"^="},
+            Punct::AssignOr =>{"|="},
+            Punct::Hash =>{"#"},
+            Punct::Vararg =>{"..."},
+            _ => panic!("Invalid punctuation"),
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AstKind {
     Undet, //undetermined
@@ -144,6 +251,30 @@ pub enum TokenKind {
     Float(f64), //float literals
     PPNum, //preprocessor numbers
     EOF, //end of file
+}
+
+impl Display for TokenKind {
+    /// TokenKinds are converted into their original C code representations. 
+    /// This means that converting C code into a token stream, and then printing it
+    /// via `fmt` should result in the same C code back, except with all whitespace removed
+    /// (since C ignores whitespace).
+    /// 
+    /// This is particularly useful for writing unit tests.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            TokenKind::Ident(id) => id.to_string(),
+            TokenKind::Punct(pct) => format!("{}", pct),
+            TokenKind::Keyword(kw) => format!("{}", kw),
+            TokenKind::Str(st) => {st.clone()}, //need to add escaped quotes before and after
+            TokenKind::Char(c) => {c.to_string()},
+            TokenKind::Int(val) => {val.to_string()},
+            TokenKind::Float(val) => {val.to_string()},
+            TokenKind::PPNum => {todo!("Preprocessor numbers")},
+            TokenKind::EOF => {String::new()},
+
+        };
+        write!(f, "{}", s)
+    }
 }
 
 #[derive(Debug, Clone)]
