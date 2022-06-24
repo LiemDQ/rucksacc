@@ -291,7 +291,7 @@ impl Token {
         Self {
             token_type: ttype,
             at_bol: false,
-            has_space: false,
+            has_space: has_space,
             hideset: HashSet::new(),
             pos: TextPosition::new(line, col, filename),
         }

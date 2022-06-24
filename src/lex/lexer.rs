@@ -471,81 +471,107 @@ impl Lexer {
     }
 }
 
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::fs;
 
-#[test]
-fn tokenize_assignment() {
-    let line = "my_variable2 = 3;";
+    fn tokenstream_to_C_code(tokens: Vec<Token>) -> String {
+        tokens.into_iter().map(|token| format!("{}", token.token_type)).collect::<String>()
+    }
 
-    let tokens = Lexer::new().tokenize(line).unwrap();
-    assert_eq!(tokens.first().unwrap().token_type, TokenKind::Ident("my_variable2".to_string()));
-    // assert_eq!(tokens.len(),4);
-    assert_eq!(tokens.into_iter().map(|tk| tk.token_type).collect::<Vec<TokenKind>>(), 
-        vec![TokenKind::Ident("my_variable2".to_string()), 
-            TokenKind::Punct(Punct::Assign), 
-            TokenKind::Int(3), 
-            TokenKind::Punct(Punct::Semicolon)]);
-}
+    #[test]
+    fn tokenize_assignment() {
+        let line = "my_variable2 = 3;";
 
-#[test]
-fn read_symbol_outputs_correctly() {
-    let s1 = ">>= 697";
-    let mut lex = Lexer::new();
-    let mut iter = s1.chars().peekable_n();
-    assert_eq!(lex.read_symbol(&mut iter).unwrap(),TokenKind::Punct(Punct::AssignShr));
-}
+        let tokens = Lexer::new().tokenize(line).unwrap();
+        assert_eq!(tokens.first().unwrap().token_type, TokenKind::Ident("my_variable2".to_string()));
+        // assert_eq!(tokens.len(),4);
+        assert_eq!(tokens.into_iter().map(|tk| tk.token_type).collect::<Vec<TokenKind>>(), 
+            vec![TokenKind::Ident("my_variable2".to_string()), 
+                TokenKind::Punct(Punct::Assign), 
+                TokenKind::Int(3), 
+                TokenKind::Punct(Punct::Semicolon)]);
+    }
 
-#[test]
-fn tokenize_function() {
-    let funcdef = "int func(){\n\
-        int x = 0;\n\
-        for(int i = 0; i < 4; i++){\n\
-            x++;\n\
-        }\n\
-        return x;\n\
-    }";
-    let mut lex = Lexer::new();
-    let tokens = lex.tokenize(funcdef).unwrap();
-    assert_eq!(tokens.into_iter().map(|tk| tk.token_type).collect::<Vec<TokenKind>>(),
-        vec![
-            //int func(){
-            TokenKind::Keyword(Keyword::Int),
-            TokenKind::Ident("func".to_string()),
-            TokenKind::Punct(Punct::OpenParen),
-            TokenKind::Punct(Punct::CloseParen),
-            TokenKind::Punct(Punct::OpenBrace),
-            //int x = 0;
-            TokenKind::Keyword(Keyword::Int),
-            TokenKind::Ident("x".to_string()),
-            TokenKind::Punct(Punct::Assign),
-            TokenKind::Int(0),
-            TokenKind::Punct(Punct::Semicolon),
-            //for(int i = 0; i < 4; i++)
-            TokenKind::Keyword(Keyword::For),
-            TokenKind::Punct(Punct::OpenParen),
-            TokenKind::Keyword(Keyword::Int),
-            TokenKind::Ident("i".to_string()),
-            TokenKind::Punct(Punct::Assign),
-            TokenKind::Int(0),
-            TokenKind::Punct(Punct::Semicolon),
-            TokenKind::Ident("i".to_string()),
-            TokenKind::Punct(Punct::Lt),
-            TokenKind::Int(4),
-            TokenKind::Punct(Punct::Semicolon),
-            TokenKind::Ident("i".to_string()),
-            TokenKind::Punct(Punct::Inc),
-            TokenKind::Punct(Punct::CloseParen),
-            //{ x++; }
-            TokenKind::Punct(Punct::OpenBrace),
-            TokenKind::Ident("x".to_string()),
-            TokenKind::Punct(Punct::Inc),
-            TokenKind::Punct(Punct::Semicolon),
-            TokenKind::Punct(Punct::CloseBrace),
-            //return x;
-            TokenKind::Keyword(Keyword::Return),
-            TokenKind::Ident("x".to_string()),
-            TokenKind::Punct(Punct::Semicolon),
-            //}
-            TokenKind::Punct(Punct::CloseBrace)
-        ]
-    );
+    #[test]
+    fn read_symbol_outputs_correctly() {
+        let s1 = ">>= 697";
+        let mut lex = Lexer::new();
+        let mut iter = s1.chars().peekable_n();
+        assert_eq!(lex.read_symbol(&mut iter).unwrap(),TokenKind::Punct(Punct::AssignShr));
+    }
+
+    #[test]
+    fn tokenize_function() {
+        let funcdef = "int func(){\n\
+            int x = 0;\n\
+            for(int i = 0; i < 4; i++){\n\
+                x++;\n\
+            }\n\
+            return x;\n\
+        }";
+        let mut lex = Lexer::new();
+        let tokens = lex.tokenize(funcdef).unwrap();
+        assert_eq!(tokens.into_iter().map(|tk| tk.token_type).collect::<Vec<TokenKind>>(),
+            vec![
+                //int func(){
+                TokenKind::Keyword(Keyword::Int),
+                TokenKind::Ident("func".to_string()),
+                TokenKind::Punct(Punct::OpenParen),
+                TokenKind::Punct(Punct::CloseParen),
+                TokenKind::Punct(Punct::OpenBrace),
+                //int x = 0;
+                TokenKind::Keyword(Keyword::Int),
+                TokenKind::Ident("x".to_string()),
+                TokenKind::Punct(Punct::Assign),
+                TokenKind::Int(0),
+                TokenKind::Punct(Punct::Semicolon),
+                //for(int i = 0; i < 4; i++)
+                TokenKind::Keyword(Keyword::For),
+                TokenKind::Punct(Punct::OpenParen),
+                TokenKind::Keyword(Keyword::Int),
+                TokenKind::Ident("i".to_string()),
+                TokenKind::Punct(Punct::Assign),
+                TokenKind::Int(0),
+                TokenKind::Punct(Punct::Semicolon),
+                TokenKind::Ident("i".to_string()),
+                TokenKind::Punct(Punct::Lt),
+                TokenKind::Int(4),
+                TokenKind::Punct(Punct::Semicolon),
+                TokenKind::Ident("i".to_string()),
+                TokenKind::Punct(Punct::Inc),
+                TokenKind::Punct(Punct::CloseParen),
+                //{ x++; }
+                TokenKind::Punct(Punct::OpenBrace),
+                TokenKind::Ident("x".to_string()),
+                TokenKind::Punct(Punct::Inc),
+                TokenKind::Punct(Punct::Semicolon),
+                TokenKind::Punct(Punct::CloseBrace),
+                //return x;
+                TokenKind::Keyword(Keyword::Return),
+                TokenKind::Ident("x".to_string()),
+                TokenKind::Punct(Punct::Semicolon),
+                //}
+                TokenKind::Punct(Punct::CloseBrace)
+            ]
+        );
+    }
+    
+    #[test]
+    fn compare_tokenization_roundtrip(){
+        let code = "void main(int argc, char** argv){\n\
+            int x = 0;\n\
+            int y = 1;\n\
+            x >>= y & 2 | 3;\n\
+            int arr[] = {1,2,3,4,5};\n\
+            int z = arr[1];\n\
+            return 0;\n\
+        }";
+        let mut lex = Lexer::new();
+        let tokens = lex.tokenize(code).unwrap();
+        let code_processed = code.to_string().split_ascii_whitespace().collect::<String>();
+        assert_eq!(code_processed, tokenstream_to_C_code(tokens));
+    }
+
 }
