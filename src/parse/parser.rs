@@ -2,15 +2,17 @@
 use rand::distributions::{Alphanumeric, DistString};
 
 use crate::lex::token::{Token, TokenKind, Keyword, Punct};
-use crate::parse::parse_err::*;
-use crate::parse::type_counter::*;
-use crate::parse::expr::*;
+use super::parse_err::*;
+use super::type_counter::*;
+use super::expr::*;
+use super::iter::*;
 use crate::types::{Qualifiers, QualifiedTypeInfo, TypeInfo, TypeKind};
 use crate::utils::{PeekNIterator, PeekN, TextPosition};
 use crate::err::{ParseErr, ParseErrMsg, ParseRes};
 use crate::ast::*;
 use crate::types::*;
 use crate::symbols::*;
+
 
 
 /// Contains the state of the parser. 
@@ -32,76 +34,6 @@ pub struct Declarator {
     pub decl_type: DeclaratorTypes,
     pub name: String,
     pub qty: QualifiedTypeInfo,
-}
-
-
-/// Ensures the next token in the iterator is of kind `tk`. If it is, skip to the next value.
-/// If the token is of the wrong kind, throws an `Err` containing information about the expected 
-/// kind.
-/// 
-/// This method is useful for parsing symbols that **must** appear in a particular branch. If the token 
-/// needs to be returned, use `consume_if_equal` instead.
-#[must_use]
-fn ensure_and_consume<I: Iterator<Item = Token>>(iter: &mut PeekNIterator<I>,  tk: TokenKind) -> ParseRes<()> {
-    //this should never be EOF
-    let token = iter.peek().unwrap();
-    if token.token_type != tk {
-        return Err(Parser::gen_parser_err(ParseErrMsg::ExpectedSymbol(tk), token));
-    } 
-    let _ = iter.next();
-    Ok(())
-}
-
-/// Determine if the next token in the iterator has TokenKind `kind`. This does not
-/// consume the iterator element. This is useful for checking for optional symbols during parsing.
-/// If consuming the element is desired, use [`consume_if_equal`] instead.
-fn check_if_equal(iter: &mut impl Iterator<Item = Token>, kind: TokenKind) -> bool {
-    let mut iter = iter.peekable();
-    iter.peek()
-        .and_then(|tok| Some(tok.token_type == kind))
-        .unwrap_or(false)
-
-}
-
-/// Consumes the current iterator element if its kind is equal to `kind`. Returns `true` if the 
-/// element is consumed, `false` otherwise. Unlike [`ensure_and_consume`], this does not throw an error
-/// if the token is not equal. 
-/// 
-/// This method is useful for branches in the syntax where the presence of one symbol leads
-/// to a different branch to parse. 
-fn consume_if_equal(iter: &mut impl Iterator<Item = Token>, kind: TokenKind) -> bool {
-    let mut iter = iter.peekable();
-    if let Some(tok) = iter.peek(){
-        if tok.token_type == kind {
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    }
-}
-
-/// Extract the [`TextPosition`] from the next token in the iterator, without consuming it.
-/// If there is no next token, returns an EOF error. 
-fn extract_position(iter: &mut impl Iterator<Item = Token>) -> ParseRes<TextPosition> {
-    let mut iter = iter.peekable();
-    let token = match iter.peek() {
-        Some(token) => token,
-        None => return Parser::gen_eof_error(),
-    };
-
-    Ok(token.pos.clone())
-}
-
-/// Checks if the next item in the iterator is `None`, returning an `Err` if this is the case.
-/// Returns the token otherwise.
-#[inline]
-fn consume_token_or_eof(iter: &mut impl Iterator<Item = Token>) -> ParseRes<Token> {
-    match iter.next() {
-        Some(token) => Ok(token),
-        None => Parser::gen_eof_error(),
-    }
 }
 
 
@@ -192,7 +124,7 @@ impl Parser{
                 if let Some(symbol) = self.syms.identifiers.get_symbol(s) {
                     symbol.node.clone()
                 } else {
-                    return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier(s.to_string()), &token));
+                    return Err(gen_parser_err(ParseErrMsg::UnknownIdentifier(s.to_string()), &token));
                 }
             },
             TokenKind::Int(v) => ASTNode::new(ASTKind::Int(v, 8), token.pos), //TODO: how to determine proper size?
@@ -200,7 +132,7 @@ impl Parser{
             TokenKind::Str(s) => ASTNode::new(ASTKind::String(s), token.pos),
             TokenKind::Char(c) => ASTNode::new(ASTKind::Char(c as i16), token.pos),
             TokenKind::Punct(Punct::OpenParen) => self.parse_expression(iter)?,
-            _ => return Parser::gen_internal_error(&token, line!()),
+            _ => return gen_internal_error(&token, line!()),
         };
 
         Ok(node)
@@ -291,7 +223,7 @@ impl Parser{
             if let TypeKind::Array(_, ref mut len) = &mut ty.kind {
                 *len = chars.len() as i64 + 1 ;
             } else {
-                return Err(Parser::gen_parser_err_pos(ParseErrMsg::TypeError("array".to_string()), &pos));
+                return Err(gen_parser_err_pos(ParseErrMsg::TypeError("array".to_string()), &pos));
             }
 
         let kind = ASTKind::InitArray(chars);
@@ -327,7 +259,7 @@ impl Parser{
             ))
 
         } else {
-            return Err(Parser::gen_parser_err_pos(ParseErrMsg::TypeError("array".to_string()), &pos));
+            return Err(gen_parser_err_pos(ParseErrMsg::TypeError("array".to_string()), &pos));
         }
     }
 
@@ -342,7 +274,7 @@ impl Parser{
         let mut member_types = if let Some(member_types) = ty.get_struct_member_types() { 
             member_types
         } else {
-            return Parser::gen_internal_error(&token, line!());
+            return gen_internal_error(&token, line!());
         };
 
         let mut member_iter = member_types.iter_mut();
@@ -365,7 +297,7 @@ impl Parser{
     /// Create ASTNodes from a variable declarator. 
     fn make_variable_node_from_declarator(decl: Declarator, tk: &Token) -> ParseRes<ASTNode> {
         if decl.decl_type != DeclaratorTypes::Object {
-            return Parser::gen_internal_error(tk, line!());
+            return gen_internal_error(tk, line!());
         }
         //TODO: determine what the offset value should be
         let kind = ASTKind::Variable(Var{name: decl.name, ty: decl.qty.ty, offset: 0});
@@ -386,7 +318,7 @@ impl Parser{
         //varargs
         let params = match &dec.qty.ty.kind {
             TypeKind::Func(_, params, is_vararg) => params, //TODO: handle varargs
-            _ => return Err(Parser::gen_parser_err(ParseErrMsg::Something, iter.peekable().peek().unwrap())),
+            _ => return Err(gen_parser_err(ParseErrMsg::Something, iter.peekable().peek().unwrap())),
         };
 
         //TODO: parse declarations? these are an optional element. need some way to determine whether this is a declaration or not.
@@ -418,7 +350,7 @@ impl Parser{
                 Box::new(self.parse_compound_stmt(iter, Some(scope))?)
             },
             //this should never happen
-            _ => return Parser::gen_internal_error(&token, line!()),
+            _ => return gen_internal_error(&token, line!()),
         };
         
         let dec_name = dec.name.clone();
@@ -493,7 +425,7 @@ impl Parser{
                     if let Some(symbol) = self.syms.identifiers.get_symbol(&id) {
                         symbol.node.clone()
                     } else {
-                        return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier(id.to_string()), &token));
+                        return Err(gen_parser_err(ParseErrMsg::UnknownIdentifier(id.to_string()), &token));
                     }
                 }
                 //special handling for Sizeof keyword
@@ -520,14 +452,14 @@ impl Parser{
                             ASTNode::new(ASTKind::UnaryOp(unary_expr), token.pos)
                         } else {
                             //should never happen
-                            return Parser::gen_internal_error(&token, line!());
+                            return gen_internal_error(&token, line!());
                         }
                     } else {
                         //if the token has no prefix bounding power, it is not a valid token to prefix an expression
-                        return Err(Parser::gen_parser_err(ParseErrMsg::InvalidExpressionToken, &token));
+                        return Err(gen_parser_err(ParseErrMsg::InvalidExpressionToken, &token));
                     }
                 }
-                _ => return Err(Parser::gen_parser_err(ParseErrMsg::Something, &token)),
+                _ => return Err(gen_parser_err(ParseErrMsg::Something, &token)),
 
             },
             //None should never happen and is indicative of an internal compiler error. 
@@ -543,7 +475,7 @@ impl Parser{
                 TokenKind::EOF => break,
                 TokenKind::Punct(_) | TokenKind::Keyword(_) => &tok.token_type,
                 //error: invalid token
-                _ => return Parser::gen_expected_one_of_error(&tok, vec![TokenKind::Punct(Punct::Any), TokenKind::Keyword(Keyword::Any), TokenKind::EOF]),
+                _ => return gen_expected_one_of_error(&tok, vec![TokenKind::Punct(Punct::Any), TokenKind::Keyword(Keyword::Any), TokenKind::EOF]),
             };
             
             //handle postfix operators. 
@@ -574,7 +506,7 @@ impl Parser{
                         if let ASTKind::Func(f) = &lhs.kind {
                             self.parse_func_call(iter, f)?
                         } else {
-                            return Err(Parser::gen_parser_err(ParseErrMsg::InvalidFunctionCall, &tok));
+                            return Err(gen_parser_err(ParseErrMsg::InvalidFunctionCall, &tok));
                         }
                     },
                     TokenKind::Punct(Punct::Point) => {
@@ -583,10 +515,10 @@ impl Parser{
                             if let Some(next) = iter.next() {
                                 self.parse_struct_member(iter, var, &next)?
                             } else {
-                                return Parser::gen_eof_error();
+                                return gen_eof_error();
                             }
                         } else {
-                            return Err(Parser::gen_parser_err(ParseErrMsg::InvalidStructReference, &tok))
+                            return Err(gen_parser_err(ParseErrMsg::InvalidStructReference, &tok))
                         }
                     },
                     TokenKind::Punct(Punct::Arrow) => {
@@ -596,10 +528,10 @@ impl Parser{
                                 todo!("Dereference var");
                                 self.parse_struct_member(iter, var, &next)?
                             } else {
-                                return Parser::gen_eof_error();
+                                return gen_eof_error();
                             }
                         } else {
-                            return Err(Parser::gen_parser_err(ParseErrMsg::InvalidStructReference, &tok))
+                            return Err(gen_parser_err(ParseErrMsg::InvalidStructReference, &tok))
                         }
                     },
                     _ => {
@@ -610,7 +542,7 @@ impl Parser{
                             ASTNode::new(ASTKind::UnaryOp(unary_expr), tok.pos)
                         } else {
                             //this should never happen if postfix binding power has the correct operators
-                            return Parser::gen_internal_error(&tok, line!());
+                            return gen_internal_error(&tok, line!());
                         }
                     }
                 };
@@ -664,7 +596,7 @@ impl Parser{
                             TokenKind::Punct(Punct::Shl) => BinaryOps::Shl,
                             TokenKind::Punct(Punct::Assign) => BinaryOps::Assign,
                             //TODO: assignment operators
-                            _ => return Err(Parser::gen_parser_err(ParseErrMsg::Something, &tok)),
+                            _ => return Err(gen_parser_err(ParseErrMsg::Something, &tok)),
                         };
     
                         ASTNode {kind: ASTKind::BinaryOp(BinaryExpr{op: binop, rhs: Box::new(rhs), lhs: Box::new(lhs)}), pos: tok.pos}
@@ -918,7 +850,7 @@ impl Parser{
         if is_const_expr(&node)? {
             Ok(node)
         } else {
-            Err(Parser::gen_parser_err_pos(ParseErrMsg::NotCompileTimeConstant, &pos))
+            Err(gen_parser_err_pos(ParseErrMsg::NotCompileTimeConstant, &pos))
         }
     }
 
@@ -935,11 +867,11 @@ impl Parser{
     /// struct 
     fn parse_struct_union_specifier<I: Iterator<Item = Token>>(&mut self, iter: &mut PeekNIterator<I>) -> ParseRes<TypeInfo> {
         let is_struct = match iter.next() {
-            None => return Parser::gen_eof_error(),
+            None => return gen_eof_error(),
             Some(token) => match token.token_type {
                 TokenKind::Keyword(Keyword::Struct) => true,
                 TokenKind::Keyword(Keyword::Union) => false,
-                _ => return Parser::gen_expected_error(&token, TokenKind::Keyword(Keyword::Struct)),
+                _ => return gen_expected_error(&token, TokenKind::Keyword(Keyword::Struct)),
             }
         };
 
@@ -957,9 +889,9 @@ impl Parser{
                     let name: String = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
                     (name, self.parse_record_members(iter)?)
                 },
-                _ => return Parser::gen_expected_error(&token, TokenKind::Punct(Punct::OpenBrace)),
+                _ => return gen_expected_error(&token, TokenKind::Punct(Punct::OpenBrace)),
             },
-            None => return Parser::gen_eof_error(),
+            None => return gen_eof_error(),
         };
 
         //if there is no struct definition, then we merely have a struct declaration that should be added to 
@@ -1089,7 +1021,7 @@ impl Parser{
                 )?;
                 ensure_and_consume(iter, TokenKind::Punct(Punct::OpenBrace))?;
             }
-            _ => return Parser::gen_expected_one_of_error(&token, vec![TokenKind::Punct(Punct::OpenBrace), TokenKind::Ident("()".to_string())]),
+            _ => return gen_expected_one_of_error(&token, vec![TokenKind::Punct(Punct::OpenBrace), TokenKind::Ident("()".to_string())]),
         };
         
         self.parse_enumerator(iter)?;
@@ -1118,7 +1050,7 @@ impl Parser{
                 val += 1;
                 
             } else {
-                return Parser::gen_expected_error(&enumerator_label, TokenKind::Ident("()".to_string()));
+                return gen_expected_error(&enumerator_label, TokenKind::Ident("()".to_string()));
             }
         }
 
@@ -1132,7 +1064,7 @@ impl Parser{
         let token = iter.next().unwrap(); //TODO: error handling
         let typename = match token.token_type {
             TokenKind::Ident(s) => s,
-            _ => return Err(Parser::gen_parser_err(ParseErrMsg::Something, &token)),
+            _ => return Err(gen_parser_err(ParseErrMsg::Something, &token)),
         };
         let node = ASTNode::new(ASTKind::Typedef(typeinfo.ty, typename.clone()), token.pos);
         //unfortunately, creating the symbol after the node results in an unnecessary string copy, but it is the simplest
@@ -1162,7 +1094,7 @@ impl Parser{
                 //TODO: typechecking
                 args.push(arg);
                 if args.len() > argtypes.len() && !is_vararg {
-                    return Err(Parser::gen_parser_err_pos(ParseErrMsg::TooManyArguments, &pos));
+                    return Err(gen_parser_err_pos(ParseErrMsg::TooManyArguments, &pos));
                 }
                 first = false;
             }
@@ -1170,7 +1102,7 @@ impl Parser{
             let kind = ASTKind::FuncCall(f.body.clone(), args);
             Ok(ASTNode::new(kind, pos))
         } else {
-            return Parser::gen_internal_error_pos(&pos, line!());
+            return gen_internal_error_pos(&pos, line!());
         }
     }
 
@@ -1184,7 +1116,7 @@ impl Parser{
                     Keyword::Restrict => quals.is_restrict = true,
                     Keyword::Const => quals.is_const = true,
                     Keyword::Volatile => quals.is_volatile = true,
-                    _ => return Err(Parser::gen_parser_err(ParseErrMsg::Something, token)),
+                    _ => return Err(gen_parser_err(ParseErrMsg::Something, token)),
                 }
                 _ => break,
             }
@@ -1205,15 +1137,15 @@ impl Parser{
         let token = consume_token_or_eof(iter)?;
         let symbol_name = match &token.token_type {
             TokenKind::Ident(s) => {s},
-            _ => { return Parser::gen_expected_error(&token, TokenKind::Ident("".to_string()))},
+            _ => { return gen_expected_error(&token, TokenKind::Ident("".to_string()))},
         };
         let symbol_type = if let Some(symbol) = self.syms.identifiers.get_symbol(symbol_name) {
             match &symbol.node.kind {
                 ASTKind::VariableDecl(var, _, _) | ASTKind::Variable(var) => { &var.ty},
-                _ => return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier(symbol_name.clone()), &token)),
+                _ => return Err(gen_parser_err(ParseErrMsg::UnknownIdentifier(symbol_name.clone()), &token)),
             }
         } else {
-            return Err(Parser::gen_parser_err(ParseErrMsg::UnknownIdentifier(symbol_name.clone()), &token));
+            return Err(gen_parser_err(ParseErrMsg::UnknownIdentifier(symbol_name.clone()), &token));
         };
         ensure_and_consume(iter, TokenKind::Punct(Punct::CloseParen))?;
         Ok(symbol_type.clone())
@@ -1276,7 +1208,7 @@ impl Parser{
                         _ => self.parse_expr_stmt(iter),
                     }
                 } else {
-                    return Parser::gen_eof_error();
+                    return gen_eof_error();
                 }
             }
             
@@ -1305,7 +1237,7 @@ impl Parser{
                 TokenKind::Keyword(Keyword::Default) => {
                     ASTKind::Default
                 },
-                _ => return Parser::gen_internal_error(&token, line!()),
+                _ => return gen_internal_error(&token, line!()),
             };
 
             ensure_and_consume(iter, TokenKind::Punct(Punct::Colon))?;
@@ -1314,7 +1246,7 @@ impl Parser{
             Ok(ASTNode::new(kind, token.pos))
 
         } else {
-            Parser::gen_eof_error()
+            gen_eof_error()
         }
     }
 
@@ -1376,7 +1308,7 @@ impl Parser{
                 ensure_and_consume(iter, TokenKind::Punct(Punct::Semicolon))?;
                 ASTKind::While{has_do: true, cond: expr, body: loop_body}
             },
-            _ => return Parser::gen_internal_error(&token, line!()),
+            _ => return gen_internal_error(&token, line!()),
         };
 
         Ok(ASTNode::new(kind, token.pos))
@@ -1407,7 +1339,7 @@ impl Parser{
                 ASTKind::Switch { cond: Box::new(expr), cases: Box::new(cases) }
             },
             //this should never happen
-            _ => return Parser::gen_internal_error(&token, line!())
+            _ => return gen_internal_error(&token, line!())
         };
 
         Ok(ASTNode::new(kind, token.pos))
@@ -1442,17 +1374,17 @@ impl Parser{
                         ASTKind::Return(None)
                     }
                 } else {
-                    return Parser::gen_eof_error();
+                    return gen_eof_error();
                 }
             },
             TokenKind::Keyword(Keyword::Goto) => {
                 let token = consume_token_or_eof(iter)?;
                 match token.token_type {
                     TokenKind::Ident(id) => ASTKind::Goto(id),
-                    _ => return Parser::gen_expected_error(&token, TokenKind::Ident("".to_string())),
+                    _ => return gen_expected_error(&token, TokenKind::Ident("".to_string())),
                 }
             }
-            _ => return Parser::gen_expected_one_of_error(
+            _ => return gen_expected_one_of_error(
                 &token, 
                 vec![
                     TokenKind::Keyword(Keyword::Continue), 
@@ -1485,7 +1417,7 @@ impl Parser{
         let asm = consume_token_or_eof(iter)?;
         let asm_code = match asm.token_type {
             TokenKind::Str(s) => s,
-            _ => return Parser::gen_expected_error(&asm, TokenKind::Str("".to_string())),
+            _ => return gen_expected_error(&asm, TokenKind::Str("".to_string())),
         };
 
         let node = ASTNode::new(ASTKind::Asm(asm_code), asm.pos);
@@ -1529,41 +1461,6 @@ impl Parser{
         Ok(ASTNode::new(ASTKind::Block(stmts), pos))
     }
     
-    #[inline]
-    fn gen_parser_err(msg: ParseErrMsg, token: &Token) -> ParseErr {
-        ParseErr::new(token.pos.clone(), token.pos.clone(), msg)
-    }
-    
-    #[inline]
-    fn gen_eof_error<T>() -> ParseRes<T> {
-        Err(Parser::gen_parser_err(ParseErrMsg::EOF,&Token::eof_token(None)))
-    }
-
-    #[inline]
-    fn gen_expected_error<T>(tk: &Token, expected: TokenKind) -> ParseRes<T> {
-        Err(Parser::gen_parser_err(ParseErrMsg::ExpectedSymbol(expected), tk))
-    }
-
-    #[inline]
-    fn gen_internal_error<T>(tk: &Token, line: u32) -> ParseRes<T> {
-        Err(Parser::gen_parser_err(ParseErrMsg::InternalError(line), tk))
-    }
-
-    #[inline]
-    fn gen_internal_error_pos<T>(pos: &TextPosition, line: u32) -> ParseRes<T> {
-        Err(Parser::gen_parser_err_pos(ParseErrMsg::InternalError(line), pos))
-    }
-
-    #[inline]
-    fn gen_expected_one_of_error<T>(tk: &Token, expected: Vec<TokenKind>) -> ParseRes<T> {
-        Err(Parser::gen_parser_err(ParseErrMsg::ExpectedOneOfSymbols(expected), tk))
-    }
-
-    #[inline]
-    fn gen_parser_err_pos(msg: ParseErrMsg, pos: &TextPosition) -> ParseErr {
-        ParseErr::new(pos.clone(), pos.clone(), msg)
-    }
-
     /// Determine if a token stream is a function definition.
     /// 
     fn is_func_def<I: Iterator<Item = Token>>(&mut self, iter: &mut PeekNIterator<I>) -> ParseRes<bool> {
@@ -1594,7 +1491,7 @@ impl Parser{
             _ = iter.advance_cursor_while(|tok| tok.token_type != TokenKind::Punct(Punct::CloseParen));
             let tok = match iter.peek_next() {
                 Some(tok) => tok,
-                None => return Parser::gen_eof_error(),
+                None => return gen_eof_error(),
             };
 
             is_funcdef = tok.token_type == TokenKind::Punct(Punct::OpenBrace);
@@ -1687,7 +1584,7 @@ impl Parser{
                     Some(storage) => {
                         //storage class specifiers are mutually exclusive. If more than one is defined, return an error. 
                         if qty.storage != StorageClass::UNUSED {
-                            return Err(Parser::gen_parser_err(ParseErrMsg::Something, &token))
+                            return Err(gen_parser_err(ParseErrMsg::Something, &token))
 
                         } else {
                             qty.storage = storage;
@@ -1725,10 +1622,10 @@ impl Parser{
                         if let Some(symbol) = self.syms.typedefs.get_symbol(&name)  {
                             match &symbol.node.kind {
                                 ASTKind::Typedef(ty, _) => ty.clone(),
-                                _ => return Err(Parser::gen_parser_err(ParseErrMsg::InvalidTypeName(name.clone()), &token)),
+                                _ => return Err(gen_parser_err(ParseErrMsg::InvalidTypeName(name.clone()), &token)),
                             }
                         } else {
-                            return Err(Parser::gen_parser_err(ParseErrMsg::InvalidTypeName(name.clone()), &token));
+                            return Err(gen_parser_err(ParseErrMsg::InvalidTypeName(name.clone()), &token));
                         }
                     },
                     TokenKind::Keyword(kw) => match kw {
@@ -1736,12 +1633,12 @@ impl Parser{
                         Keyword::Union => self.parse_struct_union_specifier(iter)?,
                         Keyword::Enum => self.parse_enum_specifier(iter)?,
                         Keyword::Typeof => self.parse_typeof_specifier(iter)?,
-                        _ => return Parser::gen_expected_one_of_error(&token, vec![TokenKind::Keyword(Keyword::Struct), 
+                        _ => return gen_expected_one_of_error(&token, vec![TokenKind::Keyword(Keyword::Struct), 
                                                     TokenKind::Keyword(Keyword::Union), 
                                                     TokenKind::Keyword(Keyword::Enum), 
                                                     TokenKind::Keyword(Keyword::Typeof)]),
                     },
-                    _ => return Parser::gen_expected_one_of_error(&token, vec![TokenKind::Ident("()".to_string()),
+                    _ => return gen_expected_one_of_error(&token, vec![TokenKind::Ident("()".to_string()),
                                                                     TokenKind::Keyword(Keyword::Struct), 
                                                                     TokenKind::Keyword(Keyword::Union), 
                                                                     TokenKind::Keyword(Keyword::Enum), 
