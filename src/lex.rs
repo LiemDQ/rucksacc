@@ -2,13 +2,16 @@ mod preprocess;
 
 pub mod token;
 pub mod lexer;
+pub mod token_err;
+pub mod iter;
 
-pub use token::{Token, TokenKind, Keyword, Punct, AstKind, PMKind, AmpKind};
+pub use token::{Token, TokenKind, Keyword, Punct, AstKind, PMKind, AmpKind, Bits};
 use crate::err::{ParseErr, ParseErrMsg, ParseRes, IOErr};
 use crate::utils::{PeekNIterator, PeekN, TextPosition};
 use std::fs::File;
 use std::{fs};
 use std::error::Error;
+
 
 /// Contains the state of the lexer. 
 /// TODO: one possible alternative implementation is to split the varying state (such as the current line and current column 
@@ -160,7 +163,7 @@ impl Lexer {
                 _ => break,
             }
         }
-        Ok(TokenKind::Int(num))
+        Ok(TokenKind::Int(num, Bits::Bits64))
     }
 
     /// See section 6.4.1 for a list of all keywords in the C language. 
@@ -306,6 +309,7 @@ impl Lexer {
             ':' => Punct::Colon,
             '~' => Punct::BitwiseNot,
             ',' => Punct::Comma,
+            '\\'=> Punct::Backslash,
             '!' => {
                 match iter.peek().unwrap_or(&' ') {
                     '=' => {self.advance(iter); Punct::Ne},
@@ -468,7 +472,7 @@ impl Lexer {
             }?;
 
             tokens.push(
-                Token::new(tok, has_space, self.state.curr_line, self.state.curr_col, self.get_current_filename())
+                Token::new(tok, self.state.curr_line, self.state.curr_col, self.get_current_filename())
             );
             has_space = false;
         }
@@ -479,6 +483,8 @@ impl Lexer {
 
 #[cfg(test)]
 mod test {
+    use crate::lex::token::Bits;
+
     use super::*;
     use std::fs;
 
@@ -496,7 +502,7 @@ mod test {
         assert_eq!(tokens.into_iter().map(|tk| tk.token_type).collect::<Vec<TokenKind>>(), 
             vec![TokenKind::Ident("my_variable2".to_string()), 
                 TokenKind::Punct(Punct::Assign), 
-                TokenKind::Int(3), 
+                TokenKind::Int(3, Bits::Bits32), 
                 TokenKind::Punct(Punct::Semicolon)]);
     }
 
@@ -531,7 +537,7 @@ mod test {
                 TokenKind::Keyword(Keyword::Int),
                 TokenKind::Ident("x".to_string()),
                 TokenKind::Punct(Punct::Assign),
-                TokenKind::Int(0),
+                TokenKind::Int(0, Bits::Bits32),
                 TokenKind::Punct(Punct::Semicolon),
                 //for(int i = 0; i < 4; i++)
                 TokenKind::Keyword(Keyword::For),
@@ -539,11 +545,11 @@ mod test {
                 TokenKind::Keyword(Keyword::Int),
                 TokenKind::Ident("i".to_string()),
                 TokenKind::Punct(Punct::Assign),
-                TokenKind::Int(0),
+                TokenKind::Int(0, Bits::Bits32),
                 TokenKind::Punct(Punct::Semicolon),
                 TokenKind::Ident("i".to_string()),
                 TokenKind::Punct(Punct::Lt),
-                TokenKind::Int(4),
+                TokenKind::Int(4, Bits::Bits32),
                 TokenKind::Punct(Punct::Semicolon),
                 TokenKind::Ident("i".to_string()),
                 TokenKind::Punct(Punct::Inc),
