@@ -1,5 +1,5 @@
 
-use super::parse_err::gen_parser_err;
+use crate::lex::token_err::gen_parser_err;
 use crate::err::{ParseErrMsg, ParseRes};
 use crate::lex::{Token};
 

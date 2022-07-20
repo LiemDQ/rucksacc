@@ -2,10 +2,10 @@
 use rand::distributions::{Alphanumeric, DistString};
 
 use crate::lex::token::{Token, TokenKind, Keyword, Punct};
-use super::parse_err::*;
+use crate::lex::token_err::*;
+use crate::lex::iter::*;
 use super::type_counter::*;
 use super::expr::*;
-use super::iter::*;
 use crate::types::{Qualifiers, QualifiedTypeInfo, TypeInfo, TypeKind};
 use crate::utils::{PeekNIterator, PeekN, TextPosition};
 use crate::err::{ParseErr, ParseErrMsg, ParseRes};
@@ -127,7 +127,7 @@ impl Parser{
                     return Err(gen_parser_err(ParseErrMsg::UnknownIdentifier(s.to_string()), &token));
                 }
             },
-            TokenKind::Int(v) => ASTNode::new(ASTKind::Int(v, 8), token.pos), //TODO: how to determine proper size?
+            TokenKind::Int(v, _) => ASTNode::new(ASTKind::Int(v, 8), token.pos), //TODO: how to determine proper size?
             TokenKind::Float(v) => ASTNode::new(ASTKind::Float(v, 8), token.pos),
             TokenKind::Str(s) => ASTNode::new(ASTKind::String(s), token.pos),
             TokenKind::Char(c) => ASTNode::new(ASTKind::Char(c as i16), token.pos),
@@ -416,7 +416,7 @@ impl Parser{
                     self.parse_expr_bp(iter, MIN_BIND_PRIO)?
                 }
                 //literals are tautologically represent themselves
-                TokenKind::Int(n) => ASTNode { kind: ASTKind::Int(n, 4), pos: token.pos},
+                TokenKind::Int(n, _) => ASTNode { kind: ASTKind::Int(n, 4), pos: token.pos},
                 TokenKind::Float(f) => ASTNode {kind: ASTKind::Float(f, 4), pos: token.pos},
                 TokenKind::Char(c) => ASTNode {kind: ASTKind::Char(c as i16), pos: token.pos},
                 TokenKind::Str(s) => ASTNode::new(ASTKind::String(s), token.pos),
