@@ -289,6 +289,7 @@ impl Display for TokenKind {
     }
 }
 
+/// Token object used by parser to construct IR.
 #[derive(Debug, Clone)]
 pub struct Token {
     pub token_type : TokenKind, //token kind
@@ -331,6 +332,13 @@ impl Token {
         match &self.token_type {
             TokenKind::Ident(i) => i,
             _ => &""
+        }
+    }
+
+    pub fn try_get_name(&self) -> ParseRes<&str> {
+        match &self.token_type {
+            TokenKind::Ident(i) => Ok(i.as_str()),
+            _ => gen_expected_error(&self, TokenKind::Ident("()".to_string())),
         }
     }
 }

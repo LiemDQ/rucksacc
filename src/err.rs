@@ -66,6 +66,8 @@ pub enum ParseErrMsg {
     InvalidStructReference,
     UnknownTypename,
     TypeError(String),
+    CustomError(String), //msg
+    CompilerError(String),
 }
 
 impl ParseErrMsg {
@@ -80,6 +82,8 @@ impl ParseErrMsg {
             ParseErrMsg::NotConstExpr => "Not a valid constant expression".to_string(),
             ParseErrMsg::InternalError(line) => format!("Internal compiler error at line {}", line),
             ParseErrMsg::EOF => "End of file reached".to_string(),
+            ParseErrMsg::CompilerError(msg) => format!("Compiler error: {}", msg),
+            ParseErrMsg::CustomError(msg) => format!("Error: {}", msg),
             _ => "Unimplemented error".to_string(),
         }
     }

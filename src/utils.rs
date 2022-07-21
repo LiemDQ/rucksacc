@@ -3,6 +3,10 @@ use std::iter::{FusedIterator, ExactSizeIterator};
 
 /// Represents a position in a text file.
 /// Useful for error reporting during parsing, as the errors will occur in a specific position.
+/// 
+/// TODO: Storing the filename in the TextPosition is an unnecessary pessimization, since the 
+/// filename will rarely change and will require a heap allocation every time the text position
+/// is copied. Consider refactoring so it can potentially be removed.
 #[derive(Debug, Clone)]
 pub struct TextPosition {
     pub line: usize,

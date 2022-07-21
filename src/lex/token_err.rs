@@ -36,3 +36,8 @@ pub fn gen_expected_one_of_error<T>(tk: &Token, expected: Vec<TokenKind>) -> Par
 pub fn gen_parser_err_pos(msg: ParseErrMsg, pos: &TextPosition) -> ParseErr {
     ParseErr::new(pos.clone(), pos.clone(), msg)
 }
+
+#[inline]
+pub fn gen_compiler_error<T>(msg: &str, pos: &TextPosition) -> ParseRes<T> {
+    Err(ParseErr::new(pos.clone(), pos.clone(), ParseErrMsg::CompilerError(msg.to_string())))
+}
