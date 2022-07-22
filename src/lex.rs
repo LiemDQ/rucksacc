@@ -431,7 +431,7 @@ impl Lexer {
     }
 
     /// Process a C source file into a vector of tokens. 
-    pub fn tokenize(&mut self, body: &str) -> Result<Vec<Token>, Box<dyn Error>> {
+    pub fn tokenize(&mut self, body: &str) -> ParseRes<Vec<Token>> {
         
         let mut iter = body.chars().peekable_n();
         let mut has_space = false;

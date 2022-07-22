@@ -154,11 +154,19 @@ impl SourceBody {
     }
 
     pub fn backtrack(&mut self) {
-        self.end_index -= 1
+        self.end_index -= 1;
     }
 
     pub fn reset_to(&mut self, idx: usize) {
         self.end_index = idx;
+    }
+
+    pub fn offset_end(&mut self, offset: isize) {
+        if offset.is_negative() {
+            self.end_index -= offset.wrapping_abs() as usize;
+        } else {
+            self.end_index += offset as usize;
+        }
     }
 
     pub fn try_next(&mut self) -> ParseRes<&Token> {
@@ -206,7 +214,7 @@ fn preprocess(macros: &mut MacroMap, body: Vec<Token>) -> ParseRes<Vec<Token>> {
     source_body.set_body(body);
 
     loop {
-        while let Some(token) = source_body.next()  {
+        while let Some(token) = source_body.next() {
             match token.token_type {
                 //#
                 TokenKind::Punct(Punct::Hash) => {
@@ -228,18 +236,16 @@ fn preprocess(macros: &mut MacroMap, body: Vec<Token>) -> ParseRes<Vec<Token>> {
                 }
                 TokenKind::Ident(_) => {
                     expand(&mut macros, token);
+                }
                     //TODO: set expanded to true ONLY if expansion took place.
-                    //will probably have to return this from the `expand` function call
-                    has_expanded = true;
-                },
-                _ => {},
+                    //will probably havResult<Vec<Token>, Box<dyn Error>>
             }
-        }
-        //preprocessor will stop once there are no macros left to expand. 
-        if !has_expanded {
-            break;
-        } else {
-            has_expanded = false;
+            //preprocessor will stop once there are no macros left to expand. 
+            if !has_expanded {
+                break;
+            } else {
+                has_expanded = false;
+            }
         }
     }
     Ok(source_body.get_merged_expansion())
@@ -362,31 +368,41 @@ fn parse_directive(macros: &mut MacroMap, directive: &String, body: &mut SourceB
     Ok(())
 }
 
-fn expand(macros: &MacroMap, tok: &Token) -> Option<Token> {
+///Expand a macro given its token, if applicable.
+///Returns the expanded macro, 
+fn expand(macros: &MacroMap, tok: &Token) -> Option<(bool, Vec<Token>)> {
         
     let name = tok.get_name();
     match name {
         "__LINE__" => {
-            return Some(Token::new(
-                TokenKind::Int(tok.pos.line as i64, Bits::Bits32),
-                tok.pos.line,
-                tok.pos.col,
-                tok.pos.filename.map(|x| &*x)
+            return Some((
+                true,
+                vec![
+                    Token::new(
+                    TokenKind::Int(tok.pos.line as i64, Bits::Bits32),
+                    tok.pos.line,
+                    tok.pos.col,
+                    tok.pos.filename.map(|x| &*x))
+                ]
             ));
         },
         "__FILE__" => {
-            return Some(Token::new(
-                TokenKind::Str(tok.pos.filename.unwrap_or("".to_string())),
-                tok.pos.line,
-                tok.pos.col,
-                tok.pos.filename.map(|x| &*x)
+            return Some((
+                true,
+                vec![
+                    Token::new(
+                    TokenKind::Str(tok.pos.filename.unwrap_or("".to_string())),
+                    tok.pos.line,
+                    tok.pos.col,
+                    tok.pos.filename.map(|x| &*x))
+                ]
             ));
         }
         _ => {},
     }
 
     if tok.is_in_hideset() || !macros.contains_key(tok.get_name()) {
-        Some(tok.clone())
+        None
     } else {
         //unwrapping should be safe as we have already checked for the presence of 
         //the key
@@ -522,6 +538,8 @@ fn parse_include_filename(body: &mut SourceBody) -> ParseRes<(bool, String)> {
     }
 }
 
+///Tokenize a header file given its filepath. Will also update the macro map with any macro definitions
+/// in the header (or subsequent nested headers).
 fn process_include_file(macros: &mut MacroMap, filepath: &str) -> ParseRes<Vec<Token>> {
     let mut lexer = Lexer::new();
     //TODO: perhaps come up with a better file handling path than this.
