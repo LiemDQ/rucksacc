@@ -12,3 +12,4 @@ ariadne = "0.1.5"
 inkwell = {version = "0.1.0-beta.4", features = ["llvm13-0"]}
 cranelift = "0.83.0"
 rand = "0.8.5"
+lazy_static = "1.4"

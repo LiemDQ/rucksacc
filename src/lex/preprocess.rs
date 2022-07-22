@@ -1,11 +1,14 @@
-use super::{token::{Token, TokenKind, ensure_and_consume}, Bits, Punct, token_err::{gen_eof_error, gen_expected_error, gen_expected_one_of_error, gen_internal_error, gen_parser_err, gen_compiler_error, gen_parser_err_pos}};
-use super::iter::*;
+use super::{token::{Token, TokenKind}, Bits, Punct, token_err::{gen_eof_error, gen_expected_error, gen_expected_one_of_error, gen_internal_error, gen_parser_err, gen_compiler_error, gen_parser_err_pos}};
 
-use crate::{utils::{TextPosition, PeekN, PeekNIterator}, err::ParseErr, lex::Lexer, parse::parser::Parser};
+use crate::{
+    utils::{TextPosition, PeekN, PeekNIterator}, 
+    err::ParseErr, 
+    lex::Lexer, 
+    parse::Parser};
 use crate::err::{ParseRes, ParseErrMsg};
+
 use std::{collections::{HashMap, HashSet}};
-use std::error::Error;
-use ::lazy_static::{self, lazy_static};
+use ::lazy_static::{lazy_static};
 
 lazy_static!{
     static ref linux_include_paths: Vec<&'static str> = vec![
@@ -213,40 +216,38 @@ fn preprocess(macros: &mut MacroMap, body: Vec<Token>) -> ParseRes<Vec<Token>> {
     let mut source_body = SourceBody::new();
     source_body.set_body(body);
 
-    loop {
-        while let Some(token) = source_body.next() {
-            match token.token_type {
-                //#
-                TokenKind::Punct(Punct::Hash) => {
-                    if let Some(t) = source_body.next() {
-                        match t.token_type {
-                            TokenKind::Ident(ref directive) => {
-                                parse_directive(&mut macros, directive, &mut source_body);
-                            },
-                            _ => gen_expected_error(&t, TokenKind::Ident("".to_string()))?,
-                        };
-                    } else {
-                        gen_eof_error()?;
-                    }
-                },
-                //##
-                //TODO
-                TokenKind::Punct(Punct::PoundPound) => {
-                    
+    while let Some(token) = source_body.next() {
+        match token.token_type {
+            //#
+            TokenKind::Punct(Punct::Hash) => {
+                if let Some(t) = source_body.next() {
+                    match t.token_type {
+                        TokenKind::Ident(ref directive) => {
+                            parse_directive(&mut macros, directive, &mut source_body);
+                        },
+                        _ => gen_expected_error(&t, TokenKind::Ident("".to_string()))?,
+                    };
+                } else {
+                    gen_eof_error()?;
                 }
-                TokenKind::Ident(_) => {
-                    expand(&mut macros, token);
-                }
-                    //TODO: set expanded to true ONLY if expansion took place.
-                    //will probably havResult<Vec<Token>, Box<dyn Error>>
+            },
+            //##
+            //TODO
+            TokenKind::Punct(Punct::PoundPound) => {
+                
             }
-            //preprocessor will stop once there are no macros left to expand. 
-            if !has_expanded {
-                break;
-            } else {
-                has_expanded = false;
+            TokenKind::Ident(_) => {
+                let expansion_result = expand(&mut macros, token);
+                if let Some(tuple) = expansion_result {
+                    has_expanded = tuple.0;
+                }
+            }
+            _ => {
+
             }
         }
+        //preprocessor will stop once there are no macros left to expand. 
+    
     }
     Ok(source_body.get_merged_expansion())
 }
@@ -636,7 +637,8 @@ fn read_constexpr(macros: &MacroMap, body: &mut SourceBody) -> ParseRes<Vec<Toke
             break;
         }
 
-        let token = expand(macros, &token).unwrap();
+        //TODO: at what point do we attempt macro expansion?
+        // let (_,tokens) = expand(macros, &token).unwrap();
         match token.token_type {
             TokenKind::Ident(ident) => {
                 if ident == "defined" {
