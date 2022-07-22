@@ -48,6 +48,7 @@ pub struct ParseErr {
 #[derive(Debug, PartialEq, Clone)]
 pub enum ParseErrMsg {
     Something,
+    FileNotFound(String),
     UnrecognizedKeyword,
     ExpectedSymbol(TokenKind),
     ExpectedOneOfSymbols(Vec<TokenKind>),
