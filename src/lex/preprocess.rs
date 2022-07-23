@@ -11,6 +11,7 @@ use std::{collections::{HashMap, HashSet}};
 use ::lazy_static::{lazy_static};
 
 lazy_static!{
+    //using #include "xxxx" simply means iterating through this list in reverse
     static ref linux_include_paths: Vec<&'static str> = vec![
         "./include/",
         "/include/",
@@ -18,7 +19,7 @@ lazy_static!{
         "/usr/include/linux/",
         "/usr/include/x86_64-linux-gnu/",
         "./include/", 
-        "./", //using #include "xxxx" simply means iterating through this list in reverse
+        "./", 
     ];
 }
 
@@ -150,6 +151,10 @@ impl SourceBody {
         }
     }
 
+    pub fn get_slice_from_end(&self) -> &[Token] {
+        &self.body[self.end_index..]
+    }
+
     pub fn next(&mut self) -> Option<&Token> {
         let result = self.body.get(self.end_index);
         self.end_index += 1;
@@ -271,7 +276,7 @@ fn parse_directive(macros: &mut MacroMap, directive: &String, body: &mut SourceB
             let name_token = body.try_next()?;
             match name_token.token_type {
                 TokenKind::Ident(ref name) =>{
-                    add_macro(macros, name.to_string(), body);
+                    add_macro(macros, name.to_string(), body.get_slice_from_end());
                 },
                 _ => return gen_expected_error(&name_token, TokenKind::Ident("()".to_string())),
             }

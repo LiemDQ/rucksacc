@@ -38,6 +38,10 @@ pub struct Declarator {
 
 
 impl Parser{
+
+    pub fn new() -> Self {
+        Self { syms: Symbols::new() }
+    }
     /// This is the starting point for parsing a C program.
     /// 
     /// 6.9
@@ -1708,5 +1712,13 @@ impl Parser{
         }
 
         Ok(nodes)
+    }
+
+    /// Used for macro conditionals
+    pub fn parse_as_const_expr(&mut self, tokens: Vec<Token>) -> ParseRes<ASTNode> {
+        let mut iter = tokens.into_iter().peekable_n();
+        //TODO: not sure if this is the correct function to call
+        let node = self.parse_const_expression(&mut iter)?; 
+        Ok(node)
     }
 }
